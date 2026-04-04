@@ -5,14 +5,6 @@
  */
 export type Either<E, A> = Left<E> | Right<A>
 
-abstract class EitherBase {
-  abstract readonly _tag: 'Left' | 'Right'
-
-  get [Symbol.toStringTag]() {
-    return `Either.${this._tag}`
-  }
-}
-
 /**
  * The error branch of an {@link Either}. Yielding a `Left` from a generator
  * short-circuits the computation; returning one propagates the error through
@@ -20,17 +12,21 @@ abstract class EitherBase {
  *
  * @typeParam E - The error type.
  */
-export class Left<E> extends EitherBase {
+export class Left<E> {
   readonly _tag = 'Left' as const
   readonly error: E
+
   constructor(error: E) {
-    super()
     this.error = error
   }
 
   *[Symbol.iterator](): Generator<Left<E>, never, unknown> {
     yield this
     throw new Error('Unreachable: Left yielded but generator continued')
+  }
+
+  get [Symbol.toStringTag]() {
+    return 'Either.Left'
   }
 
   toJSON(): { _tag: 'Left'; error: E } {
@@ -47,17 +43,21 @@ export class Left<E> extends EitherBase {
  *
  * @typeParam A - The success type.
  */
-export class Right<A> extends EitherBase {
+export class Right<A> {
   readonly _tag = 'Right' as const
   readonly value: A
+
   constructor(value: A) {
-    super()
     this.value = value
   }
 
   // eslint-disable-next-line require-yield
   *[Symbol.iterator](): Generator<never, A, unknown> {
     return this.value
+  }
+
+  get [Symbol.toStringTag]() {
+    return 'Either.Right'
   }
 
   toJSON(): { _tag: 'Right'; value: A } {
