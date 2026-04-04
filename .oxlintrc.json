@@ -1,0 +1,20 @@
+{
+  "ignorePatterns": ["dist/**", "node_modules/**"],
+  "options": {
+    "typeAware": true,
+    "typeCheck": true,
+    "maxWarnings": 10
+  },
+  "rules": {
+    "typescript/no-unnecessary-type-assertion": "error",
+    "unicorn/prefer-at": "error",
+    "prefer-const": "error",
+    "typescript/prefer-find": "error",
+    "unicorn/prefer-number-properties": "error",
+    "typescript/prefer-reduce-type-parameter": "error",
+    "unicorn/prefer-set-has": "error",
+    "typescript/prefer-return-this-type": "error",
+    "prefer-template": "error",
+    "typescript/promise-function-async": "error"
+  }
+}
