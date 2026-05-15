@@ -17,6 +17,7 @@
   },
   "scripts": {
     "bench": "vitest bench --run && bun run scripts/bench-to-csv.ts",
+    "bench:memory": "bun run scripts/memory-bench.ts",
     "build": "tsc",
     "check": "tsc --noEmit",
     "dev": "bun run src/index.ts",

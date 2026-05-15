@@ -1,0 +1,770 @@
+{
+  "bun": "1.3.14",
+  "iterations": {
+    "sync": 200000,
+    "async": 50000,
+    "warmup": 10000
+  },
+  "rows": [
+    {
+      "scenario": "either - single yield, success",
+      "async": false,
+      "impl": "yeet",
+      "iterations": 200000,
+      "transient": {
+        "scenario": "either - single yield, success",
+        "impl": "yeet",
+        "mode": "transient",
+        "iterations": 200000,
+        "before": {
+          "rss": 52035584,
+          "heapTotal": 811008,
+          "heapUsed": 175406,
+          "external": 101982,
+          "arrayBuffers": 0
+        },
+        "after": {
+          "rss": 94109696,
+          "heapTotal": 38751232,
+          "heapUsed": 418426,
+          "external": 113434,
+          "arrayBuffers": 0
+        },
+        "delta": {
+          "rss": 42074112,
+          "heapTotal": 37940224,
+          "heapUsed": 243020,
+          "external": 11452,
+          "arrayBuffers": 0
+        },
+        "postGc": {
+          "rss": 94109696,
+          "heapTotal": 844800,
+          "heapUsed": 418426,
+          "external": 108582,
+          "arrayBuffers": 0
+        },
+        "postGcDelta": {
+          "rss": 42074112,
+          "heapTotal": 33792,
+          "heapUsed": 243020,
+          "external": 6600,
+          "arrayBuffers": 0
+        },
+        "checksum": 630000
+      },
+      "retained": {
+        "scenario": "either - single yield, success",
+        "impl": "yeet",
+        "mode": "retained",
+        "iterations": 200000,
+        "before": {
+          "rss": 56360960,
+          "heapTotal": 843776,
+          "heapUsed": 175406,
+          "external": 112903,
+          "arrayBuffers": 0
+        },
+        "after": {
+          "rss": 107184128,
+          "heapTotal": 8511488,
+          "heapUsed": 7576019,
+          "external": 128987,
+          "arrayBuffers": 0
+        },
+        "delta": {
+          "rss": 46202880,
+          "heapTotal": 7667712,
+          "heapUsed": 7400613,
+          "external": 8723,
+          "arrayBuffers": 0
+        },
+        "checksum": 630051
+      }
+    },
+    {
+      "scenario": "either - single yield, success",
+      "async": false,
+      "impl": "better-result",
+      "iterations": 200000,
+      "transient": {
+        "scenario": "either - single yield, success",
+        "impl": "better-result",
+        "mode": "transient",
+        "iterations": 200000,
+        "before": {
+          "rss": 51085312,
+          "heapTotal": 843776,
+          "heapUsed": 175406,
+          "external": 108382,
+          "arrayBuffers": 0
+        },
+        "after": {
+          "rss": 107757568,
+          "heapTotal": 39303168,
+          "heapUsed": 432267,
+          "external": 125419,
+          "arrayBuffers": 0
+        },
+        "delta": {
+          "rss": 56672256,
+          "heapTotal": 38459392,
+          "heapUsed": 256861,
+          "external": 17037,
+          "arrayBuffers": 0
+        },
+        "postGc": {
+          "rss": 107773952,
+          "heapTotal": 862208,
+          "heapUsed": 432267,
+          "external": 116054,
+          "arrayBuffers": 0
+        },
+        "postGcDelta": {
+          "rss": 56688640,
+          "heapTotal": 18432,
+          "heapUsed": 256861,
+          "external": 7672,
+          "arrayBuffers": 0
+        },
+        "checksum": 1470000
+      },
+      "retained": {
+        "scenario": "either - single yield, success",
+        "impl": "better-result",
+        "mode": "retained",
+        "iterations": 200000,
+        "before": {
+          "rss": 56868864,
+          "heapTotal": 860160,
+          "heapUsed": 175406,
+          "external": 119872,
+          "arrayBuffers": 0
+        },
+        "after": {
+          "rss": 118308864,
+          "heapTotal": 8299520,
+          "heapUsed": 7855460,
+          "external": 137367,
+          "arrayBuffers": 0
+        },
+        "delta": {
+          "rss": 58769408,
+          "heapTotal": 7439360,
+          "heapUsed": 7680054,
+          "external": 10134,
+          "arrayBuffers": 0
+        },
+        "checksum": 1470051
+      }
+    },
+    {
+      "scenario": "either - two yields, success",
+      "async": false,
+      "impl": "yeet",
+      "iterations": 200000,
+      "transient": {
+        "scenario": "either - two yields, success",
+        "impl": "yeet",
+        "mode": "transient",
+        "iterations": 200000,
+        "before": {
+          "rss": 57917440,
+          "heapTotal": 811008,
+          "heapUsed": 175406,
+          "external": 117088,
+          "arrayBuffers": 0
+        },
+        "after": {
+          "rss": 110575616,
+          "heapTotal": 39998464,
+          "heapUsed": 445860,
+          "external": 137796,
+          "arrayBuffers": 0
+        },
+        "delta": {
+          "rss": 52658176,
+          "heapTotal": 39187456,
+          "heapUsed": 270454,
+          "external": 20708,
+          "arrayBuffers": 0
+        },
+        "postGc": {
+          "rss": 110624768,
+          "heapTotal": 828416,
+          "heapUsed": 445860,
+          "external": 127848,
+          "arrayBuffers": 0
+        },
+        "postGcDelta": {
+          "rss": 52707328,
+          "heapTotal": 17408,
+          "heapUsed": 270454,
+          "external": 10760,
+          "arrayBuffers": 0
+        },
+        "checksum": 630000
+      },
+      "retained": {
+        "scenario": "either - two yields, success",
+        "impl": "yeet",
+        "mode": "retained",
+        "iterations": 200000,
+        "before": {
+          "rss": 60850176,
+          "heapTotal": 843776,
+          "heapUsed": 175406,
+          "external": 128009,
+          "arrayBuffers": 0
+        },
+        "after": {
+          "rss": 128827392,
+          "heapTotal": 16200704,
+          "heapUsed": 13205781,
+          "external": 148253,
+          "arrayBuffers": 0
+        },
+        "delta": {
+          "rss": 65339392,
+          "heapTotal": 15356928,
+          "heapUsed": 13030375,
+          "external": 12883,
+          "arrayBuffers": 0
+        },
+        "checksum": 630051
+      }
+    },
+    {
+      "scenario": "either - two yields, success",
+      "async": false,
+      "impl": "better-result",
+      "iterations": 200000,
+      "transient": {
+        "scenario": "either - two yields, success",
+        "impl": "better-result",
+        "mode": "transient",
+        "iterations": 200000,
+        "before": {
+          "rss": 56754176,
+          "heapTotal": 827392,
+          "heapUsed": 175406,
+          "external": 117796,
+          "arrayBuffers": 0
+        },
+        "after": {
+          "rss": 111558656,
+          "heapTotal": 40513536,
+          "heapUsed": 451073,
+          "external": 141665,
+          "arrayBuffers": 0
+        },
+        "delta": {
+          "rss": 54804480,
+          "heapTotal": 39686144,
+          "heapUsed": 275667,
+          "external": 23869,
+          "arrayBuffers": 0
+        },
+        "postGc": {
+          "rss": 111591424,
+          "heapTotal": 844800,
+          "heapUsed": 451073,
+          "external": 128916,
+          "arrayBuffers": 0
+        },
+        "postGcDelta": {
+          "rss": 54837248,
+          "heapTotal": 17408,
+          "heapUsed": 275667,
+          "external": 11120,
+          "arrayBuffers": 0
+        },
+        "checksum": 1470000
+      },
+      "retained": {
+        "scenario": "either - two yields, success",
+        "impl": "better-result",
+        "mode": "retained",
+        "iterations": 200000,
+        "before": {
+          "rss": 60915712,
+          "heapTotal": 876544,
+          "heapUsed": 175406,
+          "external": 132903,
+          "arrayBuffers": 0
+        },
+        "after": {
+          "rss": 115900416,
+          "heapTotal": 16425984,
+          "heapUsed": 14535511,
+          "external": 144782,
+          "arrayBuffers": 0
+        },
+        "delta": {
+          "rss": 51937280,
+          "heapTotal": 15549440,
+          "heapUsed": 14360105,
+          "external": 3394,
+          "arrayBuffers": 0
+        },
+        "checksum": 1470051
+      }
+    },
+    {
+      "scenario": "either - single yield, short-circuit",
+      "async": false,
+      "impl": "yeet",
+      "iterations": 200000,
+      "transient": {
+        "scenario": "either - single yield, short-circuit",
+        "impl": "yeet",
+        "mode": "transient",
+        "iterations": 200000,
+        "before": {
+          "rss": 51527680,
+          "heapTotal": 811008,
+          "heapUsed": 175406,
+          "external": 103295,
+          "arrayBuffers": 0
+        },
+        "after": {
+          "rss": 94142464,
+          "heapTotal": 38850560,
+          "heapUsed": 426179,
+          "external": 119987,
+          "arrayBuffers": 0
+        },
+        "delta": {
+          "rss": 42614784,
+          "heapTotal": 38039552,
+          "heapUsed": 250773,
+          "external": 16692,
+          "arrayBuffers": 0
+        },
+        "postGc": {
+          "rss": 94158848,
+          "heapTotal": 844800,
+          "heapUsed": 426179,
+          "external": 110867,
+          "arrayBuffers": 0
+        },
+        "postGcDelta": {
+          "rss": 42631168,
+          "heapTotal": 33792,
+          "heapUsed": 250773,
+          "external": 7572,
+          "arrayBuffers": 0
+        },
+        "checksum": 1050000
+      },
+      "retained": {
+        "scenario": "either - single yield, short-circuit",
+        "impl": "yeet",
+        "mode": "retained",
+        "iterations": 200000,
+        "before": {
+          "rss": 54034432,
+          "heapTotal": 860160,
+          "heapUsed": 175406,
+          "external": 113345,
+          "arrayBuffers": 0
+        },
+        "after": {
+          "rss": 103858176,
+          "heapTotal": 7382016,
+          "heapUsed": 7490381,
+          "external": 131217,
+          "arrayBuffers": 0
+        },
+        "delta": {
+          "rss": 47349760,
+          "heapTotal": 6521856,
+          "heapUsed": 7314975,
+          "external": 12255,
+          "arrayBuffers": 0
+        },
+        "checksum": 1050051
+      }
+    },
+    {
+      "scenario": "either - single yield, short-circuit",
+      "async": false,
+      "impl": "better-result",
+      "iterations": 200000,
+      "transient": {
+        "scenario": "either - single yield, short-circuit",
+        "impl": "better-result",
+        "mode": "transient",
+        "iterations": 200000,
+        "before": {
+          "rss": 55115776,
+          "heapTotal": 827392,
+          "heapUsed": 175406,
+          "external": 113664,
+          "arrayBuffers": 0
+        },
+        "after": {
+          "rss": 107741184,
+          "heapTotal": 40008704,
+          "heapUsed": 439641,
+          "external": 132217,
+          "arrayBuffers": 0
+        },
+        "delta": {
+          "rss": 52625408,
+          "heapTotal": 39181312,
+          "heapUsed": 264235,
+          "external": 18553,
+          "arrayBuffers": 0
+        },
+        "postGc": {
+          "rss": 107806720,
+          "heapTotal": 844800,
+          "heapUsed": 439641,
+          "external": 121956,
+          "arrayBuffers": 0
+        },
+        "postGcDelta": {
+          "rss": 52690944,
+          "heapTotal": 17408,
+          "heapUsed": 264235,
+          "external": 8292,
+          "arrayBuffers": 0
+        },
+        "checksum": 2310000
+      },
+      "retained": {
+        "scenario": "either - single yield, short-circuit",
+        "impl": "better-result",
+        "mode": "retained",
+        "iterations": 200000,
+        "before": {
+          "rss": 57262080,
+          "heapTotal": 860160,
+          "heapUsed": 175406,
+          "external": 125909,
+          "arrayBuffers": 0
+        },
+        "after": {
+          "rss": 119521280,
+          "heapTotal": 7380992,
+          "heapUsed": 7620910,
+          "external": 142329,
+          "arrayBuffers": 0
+        },
+        "delta": {
+          "rss": 60227584,
+          "heapTotal": 6520832,
+          "heapUsed": 7445504,
+          "external": 9059,
+          "arrayBuffers": 0
+        },
+        "checksum": 2310051
+      }
+    },
+    {
+      "scenario": "either async - two yields, success",
+      "async": true,
+      "impl": "yeet",
+      "iterations": 50000,
+      "transient": {
+        "scenario": "either async - two yields, success",
+        "impl": "yeet",
+        "mode": "transient",
+        "iterations": 50000,
+        "before": {
+          "rss": 44597248,
+          "heapTotal": 843776,
+          "heapUsed": 175406,
+          "external": 164202,
+          "arrayBuffers": 0
+        },
+        "after": {
+          "rss": 92569600,
+          "heapTotal": 35573760,
+          "heapUsed": 522954,
+          "external": 208394,
+          "arrayBuffers": 0
+        },
+        "delta": {
+          "rss": 47972352,
+          "heapTotal": 34729984,
+          "heapUsed": 347548,
+          "external": 44192,
+          "arrayBuffers": 0
+        },
+        "postGc": {
+          "rss": 92651520,
+          "heapTotal": 876544,
+          "heapUsed": 522954,
+          "external": 187230,
+          "arrayBuffers": 0
+        },
+        "postGcDelta": {
+          "rss": 48054272,
+          "heapTotal": 32768,
+          "heapUsed": 347548,
+          "external": 23028,
+          "arrayBuffers": 0
+        },
+        "checksum": 156000
+      },
+      "retained": {
+        "scenario": "either async - two yields, success",
+        "impl": "yeet",
+        "mode": "retained",
+        "iterations": 50000,
+        "before": {
+          "rss": 46727168,
+          "heapTotal": 843776,
+          "heapUsed": 175406,
+          "external": 168925,
+          "arrayBuffers": 0
+        },
+        "after": {
+          "rss": 95780864,
+          "heapTotal": 7872512,
+          "heapUsed": 3477957,
+          "external": 199209,
+          "arrayBuffers": 0
+        },
+        "delta": {
+          "rss": 46432256,
+          "heapTotal": 7229440,
+          "heapUsed": 3302551,
+          "external": 28715,
+          "arrayBuffers": 0
+        },
+        "checksum": 156051
+      }
+    },
+    {
+      "scenario": "either async - two yields, success",
+      "async": true,
+      "impl": "better-result",
+      "iterations": 50000,
+      "transient": {
+        "scenario": "either async - two yields, success",
+        "impl": "better-result",
+        "mode": "transient",
+        "iterations": 50000,
+        "before": {
+          "rss": 46940160,
+          "heapTotal": 860160,
+          "heapUsed": 175406,
+          "external": 186120,
+          "arrayBuffers": 0
+        },
+        "after": {
+          "rss": 98287616,
+          "heapTotal": 35745792,
+          "heapUsed": 560249,
+          "external": 238153,
+          "arrayBuffers": 0
+        },
+        "delta": {
+          "rss": 51347456,
+          "heapTotal": 34885632,
+          "heapUsed": 384843,
+          "external": 52033,
+          "arrayBuffers": 0
+        },
+        "postGc": {
+          "rss": 98336768,
+          "heapTotal": 892928,
+          "heapUsed": 560249,
+          "external": 199484,
+          "arrayBuffers": 0
+        },
+        "postGcDelta": {
+          "rss": 51396608,
+          "heapTotal": 32768,
+          "heapUsed": 384843,
+          "external": 13364,
+          "arrayBuffers": 0
+        },
+        "checksum": 364000
+      },
+      "retained": {
+        "scenario": "either async - two yields, success",
+        "impl": "better-result",
+        "mode": "retained",
+        "iterations": 50000,
+        "before": {
+          "rss": 51052544,
+          "heapTotal": 860160,
+          "heapUsed": 175406,
+          "external": 177027,
+          "arrayBuffers": 0
+        },
+        "after": {
+          "rss": 95944704,
+          "heapTotal": 7479296,
+          "heapUsed": 3830568,
+          "external": 216435,
+          "arrayBuffers": 0
+        },
+        "delta": {
+          "rss": 41009152,
+          "heapTotal": 6619136,
+          "heapUsed": 3655162,
+          "external": 52555,
+          "arrayBuffers": 0
+        },
+        "checksum": 364051
+      }
+    },
+    {
+      "scenario": "either async - single yield, short-circuit",
+      "async": true,
+      "impl": "yeet",
+      "iterations": 50000,
+      "transient": {
+        "scenario": "either async - single yield, short-circuit",
+        "impl": "yeet",
+        "mode": "transient",
+        "iterations": 50000,
+        "before": {
+          "rss": 41025536,
+          "heapTotal": 843776,
+          "heapUsed": 175406,
+          "external": 136811,
+          "arrayBuffers": 0
+        },
+        "after": {
+          "rss": 87277568,
+          "heapTotal": 35213312,
+          "heapUsed": 486691,
+          "external": 172403,
+          "arrayBuffers": 0
+        },
+        "delta": {
+          "rss": 46252032,
+          "heapTotal": 34369536,
+          "heapUsed": 311285,
+          "external": 35592,
+          "arrayBuffers": 0
+        },
+        "postGc": {
+          "rss": 87326720,
+          "heapTotal": 876544,
+          "heapUsed": 486691,
+          "external": 155911,
+          "arrayBuffers": 0
+        },
+        "postGcDelta": {
+          "rss": 46301184,
+          "heapTotal": 32768,
+          "heapUsed": 311285,
+          "external": 19100,
+          "arrayBuffers": 0
+        },
+        "checksum": 260000
+      },
+      "retained": {
+        "scenario": "either async - single yield, short-circuit",
+        "impl": "yeet",
+        "mode": "retained",
+        "iterations": 50000,
+        "before": {
+          "rss": 43925504,
+          "heapTotal": 843776,
+          "heapUsed": 175406,
+          "external": 144146,
+          "arrayBuffers": 0
+        },
+        "after": {
+          "rss": 90275840,
+          "heapTotal": 4677632,
+          "heapUsed": 2714870,
+          "external": 171462,
+          "arrayBuffers": 0
+        },
+        "delta": {
+          "rss": 43679744,
+          "heapTotal": 3833856,
+          "heapUsed": 2539464,
+          "external": 23843,
+          "arrayBuffers": 0
+        },
+        "checksum": 260051
+      }
+    },
+    {
+      "scenario": "either async - single yield, short-circuit",
+      "async": true,
+      "impl": "better-result",
+      "iterations": 50000,
+      "transient": {
+        "scenario": "either async - single yield, short-circuit",
+        "impl": "better-result",
+        "mode": "transient",
+        "iterations": 50000,
+        "before": {
+          "rss": 44646400,
+          "heapTotal": 994304,
+          "heapUsed": 175406,
+          "external": 186126,
+          "arrayBuffers": 0
+        },
+        "after": {
+          "rss": 89079808,
+          "heapTotal": 35844096,
+          "heapUsed": 563455,
+          "external": 237807,
+          "arrayBuffers": 0
+        },
+        "delta": {
+          "rss": 44433408,
+          "heapTotal": 34849792,
+          "heapUsed": 388049,
+          "external": 51681,
+          "arrayBuffers": 0
+        },
+        "postGc": {
+          "rss": 89145344,
+          "heapTotal": 1010688,
+          "heapUsed": 563455,
+          "external": 193846,
+          "arrayBuffers": 0
+        },
+        "postGcDelta": {
+          "rss": 44498944,
+          "heapTotal": 16384,
+          "heapUsed": 388049,
+          "external": 7720,
+          "arrayBuffers": 0
+        },
+        "checksum": 572000
+      },
+      "retained": {
+        "scenario": "either async - single yield, short-circuit",
+        "impl": "better-result",
+        "mode": "retained",
+        "iterations": 50000,
+        "before": {
+          "rss": 47382528,
+          "heapTotal": 860160,
+          "heapUsed": 175406,
+          "external": 174731,
+          "arrayBuffers": 0
+        },
+        "after": {
+          "rss": 92405760,
+          "heapTotal": 6728704,
+          "heapUsed": 2823728,
+          "external": 209075,
+          "arrayBuffers": 0
+        },
+        "delta": {
+          "rss": 42369024,
+          "heapTotal": 6002688,
+          "heapUsed": 2648322,
+          "external": 49281,
+          "arrayBuffers": 0
+        },
+        "checksum": 572051
+      }
+    }
+  ]
+}

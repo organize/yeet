@@ -1,0 +1,29 @@
+# Memory benchmark
+
+Bun: 1.3.14
+Iterations: sync 200,000, async 50,000
+
+Transient growth is measured immediately after the batch, before an explicit GC.
+Retained output subtracts an empty-array baseline, forces GC, and keeps every returned Result/Either alive.
+RSS is coarse and may move in page-sized chunks; heapUsed is usually the most useful comparison.
+
+Scenario                                     Impl            Batch heap/op       Batch RSS/op        Retained heap/op      Retained RSS/op
+-------------------------------------------  --------------  ------------------  ------------------  --------------------  ----------------
+either - single yield, success               yeet            1 B/op              210 B/op            37 B/op               231 B/op
+either - single yield, success               better-result   1 B/op              283 B/op            38 B/op               294 B/op
+either - two yields, success                 yeet            1 B/op              263 B/op            65 B/op               327 B/op
+either - two yields, success                 better-result   1 B/op              274 B/op            72 B/op               260 B/op
+either - single yield, short-circuit         yeet            1 B/op              213 B/op            37 B/op               237 B/op
+either - single yield, short-circuit         better-result   1 B/op              263 B/op            37 B/op               301 B/op
+either async - two yields, success           yeet            7 B/op              959 B/op            66 B/op               929 B/op
+either async - two yields, success           better-result   8 B/op              1.0 KiB/op          73 B/op               820 B/op
+either async - single yield, short-circuit   yeet            6 B/op              925 B/op            51 B/op               874 B/op
+either async - single yield, short-circuit   better-result   8 B/op              889 B/op            53 B/op               847 B/op
+
+## Retained heap comparison
+
+- either - single yield, success: yeet 37 B/op, better-result 38 B/op (yeet 1.04x lower)
+- either - two yields, success: yeet 65 B/op, better-result 72 B/op (yeet 1.10x lower)
+- either - single yield, short-circuit: yeet 37 B/op, better-result 37 B/op (yeet 1.02x lower)
+- either async - two yields, success: yeet 66 B/op, better-result 73 B/op (yeet 1.11x lower)
+- either async - single yield, short-circuit: yeet 51 B/op, better-result 53 B/op (yeet 1.04x lower)
