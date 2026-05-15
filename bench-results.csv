@@ -1,25 +1,27 @@
 suite,name,hz,mean_ms,p75_ms,p99_ms,rme_pct,samples
-"src/better-result.bench.ts > either — single yield, success","yeet",2876187,0.0003477,0.0002920,0.0005420,4.40,2876187
-"src/better-result.bench.ts > either — single yield, success","better-result",2793532,0.0003580,0.0002920,0.0005840,5.05,2793533
-"src/better-result.bench.ts > either — two yields, success","yeet",2508565,0.0003986,0.0003330,0.0006250,5.20,2508565
-"src/better-result.bench.ts > either — two yields, success","better-result",2703668,0.0003699,0.0003330,0.0005840,5.03,2703668
-"src/better-result.bench.ts > either — single yield, short-circuit","yeet",2259513,0.0004426,0.0003750,0.0006670,4.14,2260874
-"src/better-result.bench.ts > either — single yield, short-circuit","better-result",1989406,0.0005027,0.0003750,0.0010830,5.15,1989406
-"src/better-result.bench.ts > either async — two yields, success","yeet",1158853,0.0008629,0.0007500,0.0012500,2.25,1158853
-"src/better-result.bench.ts > either async — two yields, success","better-result",955402,0.0010467,0.0009580,0.0015830,1.80,955402
-"src/better-result.bench.ts > either async — single yield, short-circuit","yeet",1205218,0.0008297,0.0007080,0.0016670,3.54,1205218
-"src/better-result.bench.ts > either async — single yield, short-circuit","better-result",1021674,0.0009788,0.0008750,0.0014590,2.81,1021674
-"src/index.bench.ts > baseline (plain functions, no Either)","early exit via exception",430986,0.0023203,0.0014160,0.0036670,8.36,431260
-"src/index.bench.ts > either (sync)","single yield, success",1874859,0.0005334,0.0002920,0.0009580,14.36,1874859
-"src/index.bench.ts > either (sync)","two yields, success",2686908,0.0003722,0.0003330,0.0005420,4.22,2686909
-"src/index.bench.ts > either (sync)","single yield, Left (short-circuit)",2079765,0.0004808,0.0003750,0.0010420,4.38,2084393
-"src/index.bench.ts > either (sync)","yield* raise()",2195679,0.0004554,0.0003750,0.0008750,4.58,2195680
-"src/index.bench.ts > either (async)","two yields, success",1175558,0.0008507,0.0007500,0.0012080,2.34,1175558
-"src/index.bench.ts > either (async)","single yield, Left (short-circuit)",542446,0.0018435,0.0007090,0.0045420,12.20,542446
-"src/index.bench.ts > validate","two checks, all pass",2458313,0.0004068,0.0003340,0.0008750,3.21,2458703
-"src/index.bench.ts > validate","two checks, all fail (accumulate)",2327328,0.0004297,0.0003750,0.0006670,3.86,2327329
-"src/index.bench.ts > firstOf","first attempt succeeds",2909214,0.0003437,0.0002920,0.0006670,4.15,2909214
-"src/index.bench.ts > firstOf","first two fail, third succeeds",2223184,0.0004498,0.0003750,0.0006250,4.06,2223185
-"src/index.bench.ts > firstOf","all three fail",2570310,0.0003891,0.0003340,0.0006250,3.78,2570364
-"src/index.bench.ts > collect","10 mixed results",1743641,0.0005735,0.0005000,0.0008750,4.02,1743641
-"src/index.bench.ts > collect","100 mixed results",417421,0.0023957,0.0022090,0.0054580,1.79,417421
+"src/better-result.bench.ts > either — single yield, success","yeet",2809550,0.0003559,0.0003330,0.0005000,2.66,8428650
+"src/better-result.bench.ts > either — single yield, success","better-result",2724490,0.0003670,0.0002920,0.0005000,3.24,8174920
+"src/better-result.bench.ts > either — two yields, success","yeet",2575447,0.0003883,0.0003340,0.0005410,2.88,7726341
+"src/better-result.bench.ts > either — two yields, success","better-result",2651451,0.0003772,0.0003330,0.0005830,2.87,7954359
+"src/better-result.bench.ts > either — single yield, short-circuit","yeet",1712953,0.0005838,0.0004170,0.0011660,5.45,5138859
+"src/better-result.bench.ts > either — single yield, short-circuit","better-result",2188681,0.0004569,0.0004160,0.0006250,2.83,6566045
+"src/better-result.bench.ts > either — complex nested checkout, success","yeet",983523,0.0010168,0.0008750,0.0013340,2.35,2950616
+"src/better-result.bench.ts > either — complex nested checkout, success","better-result",1057556,0.0009456,0.0007920,0.0012090,2.28,3172668
+"src/better-result.bench.ts > either async — two yields, success","yeet",1162411,0.0008603,0.0007920,0.0011670,1.49,3487233
+"src/better-result.bench.ts > either async — two yields, success","better-result",930925,0.0010742,0.0010000,0.0016670,1.66,2792775
+"src/better-result.bench.ts > either async — single yield, short-circuit","yeet",1258387,0.0007947,0.0007090,0.0010830,1.60,3775165
+"src/better-result.bench.ts > either async — single yield, short-circuit","better-result",1024182,0.0009764,0.0009160,0.0012920,1.89,3072547
+"src/index.bench.ts > baseline (plain functions, no Either)","early exit via exception",696689,0.0014354,0.0014580,0.0019160,0.09,2090068
+"src/index.bench.ts > either (sync)","single yield, success",2696551,0.0003708,0.0003330,0.0007080,3.03,8092840
+"src/index.bench.ts > either (sync)","two yields, success",2649315,0.0003775,0.0003340,0.0005410,2.62,7948971
+"src/index.bench.ts > either (sync)","single yield, Left (short-circuit)",2232145,0.0004480,0.0004160,0.0006250,2.71,6696436
+"src/index.bench.ts > either (sync)","yield* raise()",2196049,0.0004554,0.0004160,0.0006250,2.62,6591791
+"src/index.bench.ts > either (async)","two yields, success",1168363,0.0008559,0.0007910,0.0012080,2.21,3505088
+"src/index.bench.ts > either (async)","single yield, Left (short-circuit)",1281896,0.0007801,0.0007090,0.0011250,1.59,3845858
+"src/index.bench.ts > validate","two checks, all pass",2380437,0.0004201,0.0003750,0.0008330,2.65,7142105
+"src/index.bench.ts > validate","two checks, all fail (accumulate)",2284641,0.0004377,0.0003750,0.0006250,2.61,6853924
+"src/index.bench.ts > firstOf","first attempt succeeds",2356561,0.0004243,0.0003330,0.0007920,6.34,7069682
+"src/index.bench.ts > firstOf","first two fail, third succeeds",2173664,0.0004601,0.0004170,0.0006250,3.53,6520993
+"src/index.bench.ts > firstOf","all three fail",2545378,0.0003929,0.0003340,0.0005840,2.36,7636134
+"src/index.bench.ts > collect","10 mixed results",1787510,0.0005594,0.0005000,0.0007920,1.94,5362530
+"src/index.bench.ts > collect","100 mixed results",424532,0.0023555,0.0022920,0.0031670,1.32,1273596

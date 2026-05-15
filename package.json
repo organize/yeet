@@ -18,6 +18,7 @@
   "scripts": {
     "bench": "vitest bench --run && bun run scripts/bench-to-csv.ts",
     "bench:memory": "bun run scripts/memory-bench.ts",
+    "bench:quick": "BENCH_TIME_MS=1000 BENCH_WARMUP_TIME_MS=300 BENCH_WARMUP_ITERATIONS=20 vitest bench --run && bun run scripts/bench-to-csv.ts",
     "build": "tsc",
     "check": "tsc --noEmit",
     "dev": "bun run src/index.ts",

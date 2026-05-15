@@ -1,9 +1,8 @@
 import { bench, describe } from 'vitest'
 
+import { BENCH_OPTS } from '#/bench-options'
 import { either, validate, firstOf, collect } from '#/combinators'
 import { left, right, type Either } from '#/either'
-
-const BENCH_OPTS = { time: 1000, warmupTime: 300, warmupIterations: 20 }
 
 type User = { id: string; name: string; active: boolean }
 type Order = { id: string; userId: string }
