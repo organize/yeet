@@ -18,17 +18,15 @@ function finishEither(ret: unknown): Either<any, any> {
     : right(ret)
 }
 
-// The async path must be a named function because async functions cannot
-// be inlined into a synchronous call stack.
 function eitherSyncContinue<Eff extends Either<any, any>, Ret>(
   gen: Generator<Eff, Ret, unknown>,
   value: unknown,
 ): Either<any, any> {
   let next = gen.next(value)
   while (!next.done) {
-    const yielded = next.value
-    if (yielded._tag === 'Left') return yielded
-    next = gen.next(yielded.value)
+    const eff = next.value
+    if (eff._tag === 'Left') return eff
+    next = gen.next(eff.value)
   }
   return finishEither(next.value)
 }
@@ -93,18 +91,15 @@ export function either<Eff extends Either<any, any>, Ret>(
   if (Symbol.asyncIterator in gen) {
     return eitherAsync(gen)
   }
+
   const next = gen.next()
   if (!next.done) {
     const eff = next.value
     if (eff._tag === 'Left') return eff
     return eitherSyncContinue(gen, eff.value)
   }
-  const ret = next.value
-  return ret !== null &&
-    typeof ret === 'object' &&
-    (ret as MaybeLeft)._tag === 'Left'
-    ? (ret as unknown as Left<any>)
-    : right(ret)
+
+  return finishEither(next.value)
 }
 
 /**
@@ -150,16 +145,16 @@ export function validate<Eff extends Either<any, any>, Ret>(
   fn: (check: Check) => Generator<Eff, Ret>,
 ): Either<InferE<Eff>[], Ret> {
   const gen = fn(check)
-  const errors: InferE<Eff>[] = []
+  let errors: InferE<Eff>[] | undefined
   let next = gen.next()
 
   while (!next.done) {
     const eff = next.value
-    if (eff._tag === 'Left') errors.push(eff.error)
-    next = gen.next(undefined)
+    if (eff._tag === 'Left') (errors ??= []).push(eff.error)
+    next = gen.next()
   }
 
-  return errors.length > 0 ? left(errors) : right(next.value)
+  return errors === undefined ? right(next.value) : left(errors)
 }
 
 /**
@@ -182,17 +177,17 @@ export function firstOf<Eff extends Either<any, any>, Ret>(
   fn: () => Generator<Eff, Ret>,
 ): Either<InferE<Eff>[], InferA<Eff> | Ret> {
   const gen = fn()
-  const errors: InferE<Eff>[] = []
+  let errors: InferE<Eff>[] | undefined
   let next = gen.next()
 
   while (!next.done) {
     const eff = next.value
     if (eff._tag === 'Right') return right(eff.value)
-    errors.push(eff.error)
-    next = gen.next(undefined)
+    ;(errors ??= []).push(eff.error)
+    next = gen.next()
   }
 
-  return errors.length > 0 ? left(errors) : right(next.value)
+  return errors === undefined ? right(next.value) : left(errors)
 }
 
 /**
@@ -222,20 +217,18 @@ export function collect<Eff extends Either<any, any>>(
   fn: () => Generator<Eff, void>,
 ): Collected<InferE<Eff>, InferA<Eff>> {
   const gen = fn()
-  const acc: Collected<InferE<Eff>, InferA<Eff>> = {
-    errors: [],
-    values: [],
-  }
+  const errors: InferE<Eff>[] = []
+  const values: InferA<Eff>[] = []
   let next = gen.next()
 
   while (!next.done) {
     const eff = next.value
-    if (eff._tag === 'Left') acc.errors.push(eff.error)
-    else acc.values.push(eff.value)
-    next = gen.next(undefined)
+    if (eff._tag === 'Left') errors.push(eff.error)
+    else values.push(eff.value)
+    next = gen.next()
   }
 
-  return acc
+  return { errors, values }
 }
 
 /**

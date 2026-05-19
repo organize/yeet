@@ -38,7 +38,7 @@ export function raise<const E>(e: E): Left<E>
 export function raise(
   x: unknown,
 ): Promise<Either<Rejected, unknown>> | Left<any> {
-  if (x instanceof Promise) {
+  if (typeof x === 'object' && x !== null && x instanceof Promise) {
     return x.then(right, (e) => left(rejected(e)))
   }
   return left(x)

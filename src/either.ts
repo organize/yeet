@@ -5,6 +5,37 @@
  */
 export type Either<E, A> = Left<E> | Right<A>
 
+class LeftIterator<E> implements Iterator<Left<E>, never, unknown> {
+  private left: Left<E> | undefined
+
+  constructor(left: Left<E>) {
+    this.left = left
+  }
+
+  next(): IteratorResult<Left<E>, never> {
+    const left = this.left
+    if (left === undefined) {
+      throw new Error('Unreachable: Left yielded but generator continued')
+    }
+    this.left = undefined
+    return { value: left, done: false }
+  }
+
+  return(value: never): IteratorReturnResult<never> {
+    this.left = undefined
+    return { value, done: true }
+  }
+
+  throw(e: unknown): IteratorResult<Left<E>, never> {
+    this.left = undefined
+    throw e
+  }
+
+  [Symbol.iterator](): Iterator<Left<E>, never, unknown> {
+    return this
+  }
+}
+
 /**
  * The error branch of an {@link Either}. Yielding a `Left` from a generator
  * short-circuits the computation; returning one propagates the error through
@@ -20,9 +51,8 @@ export class Left<E> {
     this.error = error
   }
 
-  *[Symbol.iterator](): Generator<Left<E>, never, unknown> {
-    yield this
-    throw new Error('Unreachable: Left yielded but generator continued')
+  [Symbol.iterator](): Iterator<Left<E>, never, unknown> {
+    return new LeftIterator(this)
   }
 
   get [Symbol.toStringTag]() {
@@ -51,9 +81,13 @@ export class Right<A> {
     this.value = value
   }
 
-  // eslint-disable-next-line require-yield
-  *[Symbol.iterator](): Generator<never, A, unknown> {
-    return this.value
+  [Symbol.iterator](): Iterator<never, A, unknown> {
+    return this
+  }
+
+  // A Right never yields, so it can be its own completed iterator.
+  next(): IteratorReturnResult<A> {
+    return { value: this.value, done: true }
   }
 
   get [Symbol.toStringTag]() {

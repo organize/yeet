@@ -115,6 +115,28 @@ This library asks you to learn nothing. If you know `yield*`, you already know e
 
 _Some things in life just work. This is one of them._
 
+## Benchmarks (vs. `better-result`)
+
+> Apple M5, 24 GB
+
+yeet - src/better-result.bench.ts > either — single yield, success
+1.04x faster than better-result
+
+yeet - src/better-result.bench.ts > either — two yields, success
+1.08x faster than better-result
+
+yeet - src/better-result.bench.ts > either — single yield, short-circuit
+1.21x faster than better-result
+
+yeet - src/better-result.bench.ts > either — complex nested checkout, success
+1.24x faster than better-result
+
+yeet - src/better-result.bench.ts > either async — two yields, success
+1.60x faster than better-result
+
+yeet - src/better-result.bench.ts > either async — single yield, short-circuit
+1.37x faster than better-result
+
 ---
 
 MIT
