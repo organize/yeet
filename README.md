@@ -167,6 +167,146 @@ const result = either(function* (raise) {
 `either(...)` unwraps the `Right` and hands you the original `Either` as an
 ordinary value. A small trapdoor, tastefully installed.
 
+## Serialization
+
+`Left` and `Right` serialize to small tagged JSON objects. Nothing clever is
+hiding under the floorboards.
+
+```ts
+JSON.stringify(left('Nope'))
+// {"_tag":"Left","error":"Nope"}
+
+JSON.stringify(right({ id: 'user-1' }))
+// {"_tag":"Right","value":{"id":"user-1"}}
+```
+
+For trusted values that already have the serialized shape, `fromJSON` hydrates
+them back into `Left` / `Right` instances:
+
+```ts
+import { fromJSON, type SerializedEither } from 'yeet'
+
+type User = { id: string }
+
+const parsed = JSON.parse(json) as SerializedEither<string, User>
+const result = fromJSON(parsed)
+```
+
+When the JSON came from outside the room, use a schema. `yeet` accepts
+Standard Schema-compatible validators for the `error` and `value` payloads, so
+you can bring Zod, Valibot, ArkType, TypeBox adapters, or whatever your project
+already uses. `yeet` does not import any of them. It merely checks for
+`~standard` and lets the grown-ups speak for themselves.
+
+With Zod, this is the whole ceremony:
+
+```ts
+import * as z from 'zod'
+import { eitherSchema, serializedEitherSchema } from 'yeet'
+
+const ApiError = z.object({
+  code: z.string(),
+  message: z.string(),
+})
+
+const User = z.object({
+  id: z.string(),
+  email: z.string().email(),
+})
+
+type ApiError = z.infer<typeof ApiError>
+type User = z.infer<typeof User>
+
+const SerializedUserResult = serializedEitherSchema({
+  error: ApiError,
+  value: User,
+})
+
+const hydratedUserResult = eitherSchema({
+  error: ApiError,
+  value: User,
+})
+
+const parsed = await SerializedUserResult['~standard'].validate(
+  JSON.parse(json),
+)
+const hydrated = await hydratedUserResult['~standard'].validate(
+  JSON.parse(json),
+)
+```
+
+`serializedEitherSchema` returns the plain transport shape:
+
+```ts
+// { value: { _tag: 'Left', error: { code, message } } }
+// { value: { _tag: 'Right', value: { id, email } } }
+```
+
+`eitherSchema` validates the same JSON, then hydrates the output into real
+`Left` / `Right` instances:
+
+```ts
+if (hydrated.issues === undefined) {
+  // hydrated.value is Left<ApiError> | Right<User>
+}
+```
+
+TypeBox and TypeMap fit the same hole. Compile or adapt the TypeBox schemas
+into validators that expose `~standard`, then pass them in:
+
+```ts
+import { Type } from '@sinclair/typebox'
+import { Compile } from '@sinclair/typemap'
+import { serializedEitherSchema } from 'yeet'
+
+const ApiError = Compile(
+  Type.Object({
+    code: Type.String(),
+    message: Type.String(),
+  }),
+)
+
+const User = Compile(
+  Type.Object({
+    id: Type.String(),
+    email: Type.String({ format: 'email' }),
+  }),
+)
+
+const SerializedUserResult = serializedEitherSchema({
+  error: ApiError,
+  value: User,
+})
+```
+
+If the nested schemas also implement Standard JSON Schema, `yeet` will include
+their JSON Schema inside the exported `Either` envelope:
+
+```ts
+const jsonSchema = SerializedUserResult['~standard'].jsonSchema.output({
+  target: 'draft-2020-12',
+})
+```
+
+That gives you a portable JSON shape for API docs, structured outputs, form
+builders, or any other bit of software that enjoys receiving small rectangles
+of truth.
+
+Standard Schema and Standard JSON Schema are separate interfaces. If a nested
+schema only implements validation, validation still works; its JSON Schema slot
+is emitted as `{}` because `yeet` refuses to invent facts in a nice hat.
+
+```ts
+serializedEitherSchema({ error: ApiError, value: User })
+// validates: unknown -> SerializedEither<ApiError, User>
+
+eitherSchema({ error: ApiError, value: User })
+// validates: unknown -> Either<ApiError, User>
+```
+
+Nested schemas are optional. Without them, `yeet` validates the outer
+`{ _tag, error | value }` envelope and leaves the payload as `unknown`.
+
 ## Small Guards
 
 `ensure` and `ensureNotNull` cover common checks without making you write tiny
@@ -284,6 +424,11 @@ capture(either)
 validate(fn)
 firstOf(fn)
 collect(fn)
+
+// Serialization and schemas
+fromJSON(value)
+serializedEitherSchema(options?)
+eitherSchema(options?)
 
 // Guards and async helpers
 ensure(condition, onFail)

@@ -5,6 +5,15 @@
  */
 export type Either<E, A> = Left<E> | Right<A>
 
+/** The JSON representation of a {@link Left}. */
+export type SerializedLeft<E> = { readonly _tag: 'Left'; readonly error: E }
+
+/** The JSON representation of a {@link Right}. */
+export type SerializedRight<A> = { readonly _tag: 'Right'; readonly value: A }
+
+/** The JSON representation of an {@link Either}. */
+export type SerializedEither<E, A> = SerializedLeft<E> | SerializedRight<A>
+
 class LeftIterator<E> implements Iterator<Left<E>, never, unknown> {
   private left: Left<E> | undefined
 
@@ -59,7 +68,7 @@ export class Left<E> {
     return 'Either.Left'
   }
 
-  toJSON(): { _tag: 'Left'; error: E } {
+  toJSON(): SerializedLeft<E> {
     return { _tag: 'Left', error: this.error }
   }
 
@@ -94,7 +103,7 @@ export class Right<A> {
     return 'Either.Right'
   }
 
-  toJSON(): { _tag: 'Right'; value: A } {
+  toJSON(): SerializedRight<A> {
     return { _tag: 'Right', value: this.value }
   }
 
@@ -117,6 +126,17 @@ export function left<E>(e: E): Left<E> {
  */
 export function right<A>(a: A): Right<A> {
   return new Right(a)
+}
+
+/**
+ * Rehydrates a serialized {@link Either} into a {@link Left} or {@link Right}.
+ *
+ * Use {@link eitherSchema} when the input comes from an untrusted source.
+ *
+ * @param value - The serialized either value to rehydrate.
+ */
+export function fromJSON<E, A>(value: SerializedEither<E, A>): Either<E, A> {
+  return value._tag === 'Left' ? left(value.error) : right(value.value)
 }
 
 /**

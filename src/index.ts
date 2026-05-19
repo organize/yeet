@@ -1,4 +1,11 @@
-export type { Either, InferE, InferA } from '#/either.js'
+export type {
+  Either,
+  InferE,
+  InferA,
+  SerializedLeft,
+  SerializedRight,
+  SerializedEither,
+} from '#/either.js'
 export {
   Left,
   Right,
@@ -7,7 +14,22 @@ export {
   isLeft,
   isRight,
   isLeftReturn,
+  fromJSON,
 } from '#/either.js'
+
+export type {
+  StandardSchemaIssue,
+  StandardSchemaResult,
+  StandardSchemaV1,
+  StandardJSONSchemaV1,
+  StandardJSONSchemaOptions,
+  StandardSchemaWithOptionalJSONSchemaV1,
+  JsonSchema,
+  EitherSchemaOptions,
+  SerializedEitherSchema,
+  EitherSchema,
+} from '#/schema.js'
+export { serializedEitherSchema, eitherSchema } from '#/schema.js'
 
 export type { Step, Strategy } from '#/fold.js'
 export { fold, foldAsync } from '#/fold.js'

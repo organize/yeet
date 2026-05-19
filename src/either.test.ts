@@ -1,6 +1,71 @@
 import { describe, expect, it } from 'vitest'
 
-import { left, right, isLeft, isRight, isLeftReturn } from '#/either.js'
+import {
+  left,
+  right,
+  isLeft,
+  isRight,
+  isLeftReturn,
+  fromJSON,
+} from '#/either.js'
+import {
+  type JsonSchema,
+  type StandardJSONSchemaV1,
+  type StandardSchemaV1,
+  eitherSchema,
+  serializedEitherSchema,
+} from '#/schema.js'
+
+const stringSchema = {
+  '~standard': {
+    version: 1,
+    vendor: 'test',
+    validate(value: unknown) {
+      return typeof value === 'string'
+        ? { value }
+        : { issues: [{ message: 'Expected string' }] }
+    },
+    jsonSchema: {
+      input: () => ({ type: 'string' }),
+      output: () => ({ type: 'string' }),
+    },
+  },
+} satisfies StandardSchemaV1<unknown, string> &
+  StandardJSONSchemaV1<unknown, string>
+
+const numberSchema = {
+  '~standard': {
+    version: 1,
+    vendor: 'test',
+    validate(value: unknown) {
+      return typeof value === 'number'
+        ? { value }
+        : { issues: [{ message: 'Expected number' }] }
+    },
+    jsonSchema: {
+      input: () => ({ type: 'number' }),
+      output: () => ({ type: 'number' }),
+    },
+  },
+} satisfies StandardSchemaV1<unknown, number> &
+  StandardJSONSchemaV1<unknown, number>
+
+const stringToNumberSchema = {
+  '~standard': {
+    version: 1,
+    vendor: 'test',
+    validate(value: unknown) {
+      return typeof value === 'string'
+        ? { value: Number(value) }
+        : { issues: [{ message: 'Expected numeric string' }] }
+    },
+    jsonSchema: {
+      input: ({ target }) => ({ type: 'string', title: target }),
+      output: ({ target }) => ({ type: 'number', title: target }),
+    },
+  },
+} satisfies StandardSchemaV1<string, number> &
+  StandardJSONSchemaV1<string, number>
 
 describe('left / right constructors', () => {
   it('left holds the error value', () => {
@@ -70,6 +135,166 @@ describe('toJSON', () => {
     expect(JSON.parse(JSON.stringify(right(42)))).toEqual({
       _tag: 'Right',
       value: 42,
+    })
+  })
+})
+
+describe('serialization schemas', () => {
+  it('rehydrates serialized Left and Right values', () => {
+    const leftResult = fromJSON({ _tag: 'Left', error: 'oops' })
+    const rightResult = fromJSON({ _tag: 'Right', value: 42 })
+
+    expect(leftResult._tag).toBe('Left')
+    if (leftResult._tag === 'Left') expect(leftResult.error).toBe('oops')
+
+    expect(rightResult._tag).toBe('Right')
+    if (rightResult._tag === 'Right') expect(rightResult.value).toBe(42)
+  })
+
+  it('validates serialized Either JSON with Standard Schema', async () => {
+    const schema = serializedEitherSchema({
+      error: stringSchema,
+      value: numberSchema,
+    })
+
+    const result = await schema['~standard'].validate(
+      JSON.parse(JSON.stringify(left('oops'))),
+    )
+
+    expect(result).toEqual({ value: { _tag: 'Left', error: 'oops' } })
+  })
+
+  it('uses nested Standard Schema output when validation transforms values', async () => {
+    const schema = serializedEitherSchema({
+      value: stringToNumberSchema,
+    })
+
+    const result = await schema['~standard'].validate({
+      _tag: 'Right',
+      value: '42',
+    })
+
+    expect(result).toEqual({ value: { _tag: 'Right', value: 42 } })
+  })
+
+  it('validates and hydrates serialized Either JSON with Standard Schema', async () => {
+    const schema = eitherSchema({
+      error: stringSchema,
+      value: numberSchema,
+    })
+
+    const result = await schema['~standard'].validate(
+      JSON.parse(JSON.stringify(right(42))),
+    )
+
+    expect(result).toEqual({ value: right(42) })
+  })
+
+  it('prefixes nested Standard Schema issue paths', async () => {
+    const schema = eitherSchema({
+      error: stringSchema,
+      value: numberSchema,
+    })
+
+    const result = await schema['~standard'].validate({
+      _tag: 'Left',
+      error: 42,
+    })
+
+    expect(result).toEqual({
+      issues: [{ message: 'Expected string', path: ['error'] }],
+    })
+  })
+
+  it('ships a Standard JSON Schema for the serialized shape', () => {
+    const schema = serializedEitherSchema({
+      error: stringSchema,
+      value: numberSchema,
+    })
+
+    const jsonSchema = schema['~standard'].jsonSchema.output({
+      target: 'draft-2020-12',
+    })
+
+    expect(jsonSchema satisfies JsonSchema).toEqual({
+      oneOf: [
+        {
+          type: 'object',
+          properties: {
+            _tag: { enum: ['Left'] },
+            error: { type: 'string' },
+          },
+          required: ['_tag', 'error'],
+          additionalProperties: false,
+        },
+        {
+          type: 'object',
+          properties: {
+            _tag: { enum: ['Right'] },
+            value: { type: 'number' },
+          },
+          required: ['_tag', 'value'],
+          additionalProperties: false,
+        },
+      ],
+    })
+  })
+
+  it('separates input and output JSON Schema for nested transforms', () => {
+    const schema = serializedEitherSchema({
+      value: stringToNumberSchema,
+    })
+
+    const input = schema['~standard'].jsonSchema.input({
+      target: 'draft-07',
+    })
+    const output = schema['~standard'].jsonSchema.output({
+      target: 'draft-07',
+    })
+
+    expect(input).toEqual({
+      oneOf: [
+        {
+          type: 'object',
+          properties: {
+            _tag: { enum: ['Left'] },
+            error: {},
+          },
+          required: ['_tag', 'error'],
+          additionalProperties: false,
+        },
+        {
+          type: 'object',
+          properties: {
+            _tag: { enum: ['Right'] },
+            value: { type: 'string', title: 'draft-07' },
+          },
+          required: ['_tag', 'value'],
+          additionalProperties: false,
+        },
+      ],
+    })
+    expect(output).toEqual({
+      oneOf: [
+        {
+          type: 'object',
+          properties: {
+            _tag: { enum: ['Left'] },
+            error: {},
+          },
+          required: ['_tag', 'error'],
+          additionalProperties: false,
+        },
+        {
+          type: 'object',
+          properties: {
+            _tag: { enum: ['Right'] },
+            value: { type: 'number', title: 'draft-07' },
+          },
+          required: ['_tag', 'value'],
+          additionalProperties: false,
+        },
+      ],
     })
   })
 })
