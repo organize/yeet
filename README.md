@@ -64,7 +64,7 @@ const result = either(function* () {
   const value = yield* right(42) // value is 42
   yield* left('Nope') // stops here
   return value
-})
+}) // Either<'Nope', 42>
 ```
 
 Returning `raise(error)` is the typed early-exit move:
@@ -74,7 +74,7 @@ const result = either(function* (raise) {
   const user = yield* getUser(id)
   if (!user.active) return raise('Inactive' as const)
   return user
-})
+}) // Either<'UserNotFound' | 'Inactive', User>
 ```
 
 There are no annotations in that function body. The error union is inferred from
