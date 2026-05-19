@@ -5,14 +5,39 @@
  */
 export type Either<E, A> = Left<E> | Right<A>
 
+/** A plain JSON-friendly fallback for native `Error` values. */
+export type SerializedError = {
+  readonly name: string
+  readonly message: string
+  readonly cause?: unknown
+  readonly [key: string]: unknown
+}
+
+/** The JSON payload representation of a value. */
+export type SerializedPayload<T> = T extends { toJSON(): infer J }
+  ? J
+  : T extends Error
+    ? SerializedError
+    : T
+
 /** The JSON representation of a {@link Left}. */
-export type SerializedLeft<E> = { readonly _tag: 'Left'; readonly error: E }
+export type SerializedLeft<E> = {
+  readonly _tag: 'Left'
+  readonly error: E
+}
 
 /** The JSON representation of a {@link Right}. */
-export type SerializedRight<A> = { readonly _tag: 'Right'; readonly value: A }
+export type SerializedRight<A> = {
+  readonly _tag: 'Right'
+  readonly value: A
+}
 
 /** The JSON representation of an {@link Either}. */
 export type SerializedEither<E, A> = SerializedLeft<E> | SerializedRight<A>
+
+type ToJSONLike = {
+  toJSON(): unknown
+}
 
 class LeftIterator<E> implements Iterator<Left<E>, never, unknown> {
   private left: Left<E> | undefined
@@ -68,8 +93,8 @@ export class Left<E> {
     return 'Either.Left'
   }
 
-  toJSON(): SerializedLeft<E> {
-    return { _tag: 'Left', error: this.error }
+  toJSON(): SerializedLeft<SerializedPayload<E>> {
+    return { _tag: 'Left', error: toSerializedPayload(this.error) }
   }
 
   [Symbol.toPrimitive](hint: 'string' | 'number' | 'default') {
@@ -103,8 +128,8 @@ export class Right<A> {
     return 'Either.Right'
   }
 
-  toJSON(): SerializedRight<A> {
-    return { _tag: 'Right', value: this.value }
+  toJSON(): SerializedRight<SerializedPayload<A>> {
+    return { _tag: 'Right', value: toSerializedPayload(this.value) }
   }
 
   [Symbol.toPrimitive](hint: 'string' | 'number' | 'default') {
@@ -137,6 +162,31 @@ export function right<A>(a: A): Right<A> {
  */
 export function fromJSON<E, A>(value: SerializedEither<E, A>): Either<E, A> {
   return value._tag === 'Left' ? left(value.error) : right(value.value)
+}
+
+/**
+ * Checks whether an unknown value is exactly the serialized {@link Either}
+ * envelope.
+ *
+ * This intentionally validates only the outer transport shape. Use
+ * {@link eitherSchema} to validate nested payloads too.
+ *
+ * @param value - The unknown value to test.
+ */
+export function isSerializedEither(
+  value: unknown,
+): value is SerializedEither<unknown, unknown> {
+  if (!isRecord(value)) return false
+
+  if (value['_tag'] === 'Left') {
+    return hasOnlySerializedKeys(value, 'error')
+  }
+
+  if (value['_tag'] === 'Right') {
+    return hasOnlySerializedKeys(value, 'value')
+  }
+
+  return false
 }
 
 /**
@@ -183,4 +233,65 @@ export function isLeftReturn<T>(value: T): value is Extract<T, Left<any>> {
     '_tag' in value &&
     value._tag === 'Left'
   )
+}
+
+function toSerializedPayload<T>(
+  value: T,
+  seen = new WeakSet<object>(),
+): SerializedPayload<T> {
+  if (hasToJSON(value)) return value.toJSON() as SerializedPayload<T>
+  if (value instanceof Error)
+    return serializeError(value, seen) as SerializedPayload<T>
+  return value as SerializedPayload<T>
+}
+
+function serializeError(error: Error, seen: WeakSet<object>): SerializedError {
+  const serialized: Record<string, unknown> = {
+    name: error.name,
+    message: error.message,
+  }
+
+  if (seen.has(error)) return serialized as SerializedError
+  seen.add(error)
+
+  const fields = error as unknown as Record<string, unknown>
+  for (const key of Object.keys(error)) {
+    if (key === 'stack') continue
+    serialized[key] = toSerializedPayload(fields[key], seen)
+  }
+
+  if (
+    'cause' in error &&
+    error.cause !== undefined &&
+    serialized['cause'] === undefined
+  ) {
+    serialized['cause'] = toSerializedPayload(error.cause, seen)
+  }
+
+  return serialized as SerializedError
+}
+
+function hasToJSON(value: unknown): value is ToJSONLike {
+  return (
+    (typeof value === 'object' || typeof value === 'function') &&
+    value !== null &&
+    'toJSON' in value &&
+    typeof value.toJSON === 'function'
+  )
+}
+
+function hasOnlySerializedKeys(
+  value: Record<PropertyKey, unknown>,
+  payloadKey: 'error' | 'value',
+): boolean {
+  const keys = Object.keys(value)
+  return (
+    keys.length === 2 &&
+    Object.prototype.hasOwnProperty.call(value, '_tag') &&
+    Object.prototype.hasOwnProperty.call(value, payloadKey)
+  )
+}
+
+function isRecord(value: unknown): value is Record<PropertyKey, unknown> {
+  return typeof value === 'object' && value !== null
 }

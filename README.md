@@ -180,17 +180,39 @@ JSON.stringify(right({ id: 'user-1' }))
 // {"_tag":"Right","value":{"id":"user-1"}}
 ```
 
+`toJSON()` eagerly converts nested values that provide their own `toJSON`.
+Native `Error` objects become plain `{ name, message, ...fields }` objects. This
+keeps the returned transport object boring even in frameworks that inspect
+prototypes before JSON encoding, as some server-function and RPC layers do.
+
+```ts
+class NotFound extends Error {
+  readonly _tag = 'NotFound'
+
+  toJSON() {
+    return { _tag: this._tag, message: this.message }
+  }
+}
+
+left(new NotFound('User not found')).toJSON()
+// { _tag: 'Left', error: { _tag: 'NotFound', message: 'User not found' } }
+```
+
 For trusted values that already have the serialized shape, `fromJSON` hydrates
 them back into `Left` / `Right` instances:
 
 ```ts
-import { fromJSON, type SerializedEither } from 'yeet'
+import { fromJSON, isSerializedEither, type SerializedEither } from 'yeet'
 
 type User = { id: string }
 
 const parsed = JSON.parse(json) as SerializedEither<string, User>
 const result = fromJSON(parsed)
 ```
+
+`isSerializedEither(value)` is available when you only need to detect yeet's
+strict outer envelope. It does not validate nested payloads; that is what the
+schemas below are for.
 
 When the JSON came from outside the room, use a schema. `yeet` accepts
 Standard Schema-compatible validators for the `error` and `value` payloads, so
@@ -427,6 +449,7 @@ collect(fn)
 
 // Serialization and schemas
 fromJSON(value)
+isSerializedEither(value)
 serializedEitherSchema(options?)
 eitherSchema(options?)
 

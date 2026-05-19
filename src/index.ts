@@ -2,6 +2,8 @@ export type {
   Either,
   InferE,
   InferA,
+  SerializedError,
+  SerializedPayload,
   SerializedLeft,
   SerializedRight,
   SerializedEither,
@@ -15,6 +17,7 @@ export {
   isRight,
   isLeftReturn,
   fromJSON,
+  isSerializedEither,
 } from '#/either.js'
 
 export type {

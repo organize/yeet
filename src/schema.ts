@@ -168,6 +168,11 @@ function validateSerialized<E, A>(
   if (value['_tag'] === 'Left') {
     if (!('error' in value)) return failure('Expected Left.error', ['error'])
 
+    const unexpected = unexpectedSerializedProperty(value, 'error')
+    if (unexpected !== undefined) {
+      return failure('Unexpected serialized Either property', [unexpected])
+    }
+
     const result = validateInner(options.error, value['error'], 'error')
     if (hydrate) {
       if (isPromiseLike(result)) return result.then(finishLeftHydrated<E, A>)
@@ -180,6 +185,11 @@ function validateSerialized<E, A>(
 
   if (value['_tag'] === 'Right') {
     if (!('value' in value)) return failure('Expected Right.value', ['value'])
+
+    const unexpected = unexpectedSerializedProperty(value, 'value')
+    if (unexpected !== undefined) {
+      return failure('Unexpected serialized Either property', [unexpected])
+    }
 
     const result = validateInner(options.value, value['value'], 'value')
     if (hydrate) {
@@ -264,6 +274,16 @@ function failure(
   return {
     issues: [path === undefined ? { message } : { message, path }],
   }
+}
+
+function unexpectedSerializedProperty(
+  value: Record<PropertyKey, unknown>,
+  payloadKey: 'error' | 'value',
+): string | undefined {
+  for (const key of Object.keys(value)) {
+    if (key !== '_tag' && key !== payloadKey) return key
+  }
+  return undefined
 }
 
 function eitherJsonSchema<E, A>(

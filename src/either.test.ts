@@ -7,6 +7,7 @@ import {
   isRight,
   isLeftReturn,
   fromJSON,
+  isSerializedEither,
 } from '#/either.js'
 import {
   type JsonSchema,
@@ -66,6 +67,24 @@ const stringToNumberSchema = {
   },
 } satisfies StandardSchemaV1<string, number> &
   StandardJSONSchemaV1<string, number>
+
+class TaggedTransportError extends Error {
+  readonly _tag = 'TaggedTransportError'
+  readonly entity: string
+
+  constructor(entity: string) {
+    super(`${entity} not found`)
+    this.entity = entity
+  }
+
+  toJSON() {
+    return {
+      _tag: this._tag,
+      entity: this.entity,
+      message: this.message,
+    }
+  }
+}
 
 describe('left / right constructors', () => {
   it('left holds the error value', () => {
@@ -137,6 +156,27 @@ describe('toJSON', () => {
       value: 42,
     })
   })
+
+  it('serializes nested values with toJSON before returning the transport object', () => {
+    const serialized = left(new TaggedTransportError('User')).toJSON()
+
+    expect(serialized.error).toEqual({
+      _tag: 'TaggedTransportError',
+      entity: 'User',
+      message: 'User not found',
+    })
+    expect(serialized.error).not.toBeInstanceOf(Error)
+  })
+
+  it('serializes plain Error values into plain objects', () => {
+    const serialized = left(new TypeError('boom')).toJSON()
+
+    expect(serialized.error).toEqual({
+      name: 'TypeError',
+      message: 'boom',
+    })
+    expect(serialized.error).not.toBeInstanceOf(Error)
+  })
 })
 
 describe('serialization schemas', () => {
@@ -162,6 +202,33 @@ describe('serialization schemas', () => {
     )
 
     expect(result).toEqual({ value: { _tag: 'Left', error: 'oops' } })
+  })
+
+  it('detects strict serialized Either envelopes', () => {
+    expect(isSerializedEither({ _tag: 'Left', error: 'oops' })).toBe(true)
+    expect(isSerializedEither({ _tag: 'Right', value: 42 })).toBe(true)
+    expect(
+      isSerializedEither({ _tag: 'Right', value: 42, error: 'oops' }),
+    ).toBe(false)
+    expect(
+      isSerializedEither({ _tag: 'Left', error: 'oops', extra: true }),
+    ).toBe(false)
+  })
+
+  it('rejects ambiguous serialized Either envelopes', async () => {
+    const schema = serializedEitherSchema()
+
+    const result = await schema['~standard'].validate({
+      _tag: 'Left',
+      error: 'oops',
+      value: 42,
+    })
+
+    expect(result).toEqual({
+      issues: [
+        { message: 'Unexpected serialized Either property', path: ['value'] },
+      ],
+    })
   })
 
   it('uses nested Standard Schema output when validation transforms values', async () => {
