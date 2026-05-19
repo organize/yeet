@@ -1,142 +1,304 @@
 # yeet
 
-_Some say error handling is hard. They're wrong. It's just been done poorly._
+_Some say error handling is hard. They are not entirely wrong. But they have,
+perhaps, been using tools that make it feel like carrying furniture through a
+revolving door._
 
-There is a certain kind of programmer who, when faced with an error, throws an exception and walks away. Hopes for the best. That programmer is not you.
+`yeet` is a tiny, dependency-free `Either` library for TypeScript. It gives you
+typed `Left` / `Right` values, generator-based do-notation, async support, and a
+few practical helpers for validation and fallback flows.
 
-You are here because you believe errors deserve to be _handled_, carried with dignity from the place they are born to the place they belong.
+No runtime dependencies. No method-chain cathedral. No pipe operator pilgrimage.
+
+Just ordinary JavaScript control flow, with TypeScript quietly keeping score.
 
 ```ts
-import { either } from 'yeet'
+import { either, left, right, type Either } from 'yeet'
+
+type User = { id: string; active: boolean }
+type Order = { id: string; userId: string }
+
+const getUser = (id: string): Either<'UserNotFound', User> =>
+  id === '1' ? right({ id, active: true }) : left('UserNotFound')
+
+const getOrders = (userId: string): Either<'DbError', Order[]> =>
+  right([{ id: 'order-1', userId }])
 
 const result = either(function* (raise) {
   const user = yield* getUser('1')
-  if (!user.active) return raise('Inactive')
+  if (!user.active) return raise('Inactive' as const)
+
   const orders = yield* getOrders(user.id)
   return { user, orders }
 })
-// Either<"UserNotFound" | "Inactive" | "DbError", { user, orders }>
+
+// Either<"UserNotFound" | "Inactive" | "DbError", { user: User; orders: Order[] }>
 ```
-
-No method chains. No wrapper types on every line. No explicit type annotations.
-
-Just generators. Just JavaScript.
-
----
-
-## The Simple Truth
-
-**Sync:**
-
-```ts
-const user = yield * getUser(id)
-```
-
-**Async:**
-
-```ts
-const user = yield * (await fetchUser(id))
-```
-
-**Raw promises that might reject:**
-
-```ts
-const data = yield * (await raise(fetch('/api')))
-```
-
-That's it. That's the whole API.
-
----
-
-## What `raise` Does
-
-```ts
-raise('NotFound') // → Left<"NotFound">
-raise(fetch('/api')) // → Promise<Either<Rejected, Response>>
-```
-
-One function. Two jobs. No confusion.
-
----
-
-## When You Need More
-
-**Accumulate all errors instead of short-circuiting:**
-
-```ts
-const result = validate(function* (check) {
-  const age = yield* check(validateAge(input.age))
-  const name = yield* check(validateName(input.name))
-  return { age, name }
-})
-// Either<ValidationError[], { age, name }>
-```
-
-**Try multiple sources, take first success:**
-
-```ts
-const data = firstOf(function* () {
-  yield cache.get(key)
-  yield db.get(key)
-  yield api.get(key)
-})
-// Either<Error[], Data>
-```
-
-**Collect successes and failures separately:**
-
-```ts
-const { values, errors } = collect(function* () {
-  for (const item of items) yield process(item)
-})
-```
-
-**The engine, if you want to drive it yourself:**
-
-`fold` / `foldAsync` accept a `Strategy` (`init`, `step`, `finish`) and run any generator through it. Everything above is built on top of these two functions.
-
----
 
 ## Install
 
 ```sh
+npm install yeet
+pnpm add yeet
+yarn add yeet
 bun add yeet
 ```
 
----
+`yeet` is ESM, ships TypeScript declarations, and has zero runtime
+dependencies.
+
+## The Idea
+
+An `Either<E, A>` is one of two things:
+
+```ts
+left(error) // Left<E>
+right(value) // Right<A>
+```
+
+Inside `either(...)`, you can unwrap a `Right` with `yield*`. If the value is a
+`Left`, the whole computation short-circuits and returns that `Left`.
+
+```ts
+const result = either(function* () {
+  const value = yield* right(42) // value is 42
+  yield* left('Nope') // stops here
+  return value
+})
+```
+
+Returning `raise(error)` is the typed early-exit move:
+
+```ts
+const result = either(function* (raise) {
+  const user = yield* getUser(id)
+  if (!user.active) return raise('Inactive' as const)
+  return user
+})
+```
+
+There are no annotations in that function body. The error union is inferred from
+the things you yield and raise.
+
+## Sync
+
+```ts
+const checkout = either(function* (raise) {
+  const session = yield* getSession('session-1')
+  if (!session.checkoutEnabled) return raise('CheckoutDisabled' as const)
+
+  const user = yield* getUser(session.userId)
+  const cart = yield* getCart(user.id)
+
+  return { user, cart }
+})
+```
+
+If `getSession`, `getUser`, or `getCart` returns a `Left`, execution stops at
+that line. Otherwise the unwrapped success value continues downstream, like a
+quiet river in a documentary about responsible software.
+
+## Async
+
+Async generators work the same way. Await the `Either`, then `yield*` it.
+
+```ts
+const result = await either(async function* (raise) {
+  const user = yield* await fetchUser('1')
+  const orders = yield* await fetchOrders(user.id)
+
+  if (orders.length === 0) return raise('NoOrders' as const)
+
+  return { user, orders }
+})
+```
+
+Raw promises that may reject can go through `raise(promise)`. Rejections become
+`Left<Rejected>` instead of escaping as thrown exceptions.
+
+```ts
+import { either } from 'yeet'
+
+const result = await either(async function* (raise) {
+  const response = yield* await raise(fetch('/api/user'))
+
+  if (!response.ok) {
+    return raise({ _tag: 'HttpError' as const, status: response.status })
+  }
+
+  const data = yield* await raise(response.json() as Promise<unknown>)
+  return data
+})
+```
+
+## Small Guards
+
+`ensure` and `ensureNotNull` cover common checks without making you write tiny
+one-off `Either` factories.
+
+```ts
+import { either, ensure, ensureNotNull } from 'yeet'
+
+const result = either(function* (raise) {
+  const id = yield* ensureNotNull(input.userId, () => 'MissingUserId' as const)
+  yield* ensure(id.length > 0, () => 'EmptyUserId' as const)
+
+  const user = yield* getUser(id)
+  if (!user.active) return raise('Inactive' as const)
+
+  return user
+})
+```
+
+## Accumulate Errors
+
+Sometimes the first error is not enough. `validate` runs every check and returns
+all failures as `Left<E[]>`.
+
+```ts
+import { validate, left, right, type Either } from 'yeet'
+
+const validateAge = (n: number): Either<'TooYoung' | 'TooOld', number> =>
+  n < 0 ? left('TooYoung') : n > 150 ? left('TooOld') : right(n)
+
+const validateName = (s: string): Either<'Empty' | 'TooLong', string> =>
+  s.length === 0 ? left('Empty') : s.length > 100 ? left('TooLong') : right(s)
+
+const result = validate(function* (check) {
+  const age = yield* check(validateAge(input.age))
+  const name = yield* check(validateName(input.name))
+
+  return { age, name }
+})
+
+// Either<
+//   ("TooYoung" | "TooOld" | "Empty" | "TooLong")[],
+//   { age: number | undefined; name: string | undefined }
+// >
+```
+
+When a check fails, `check(...)` returns `undefined` inside the generator so the
+rest of the validation can continue. The final result tells you whether the day
+was won.
+
+## Try The First Success
+
+`firstOf` tries yielded `Either`s in order and returns the first `Right`. If they
+all fail, it returns every error.
+
+```ts
+import { firstOf } from 'yeet'
+
+const user = firstOf(function* () {
+  yield getUserFromCache(id)
+  yield getUserFromReplica(id)
+  yield getUserFromPrimary(id)
+})
+
+// Either<Error[], User>
+```
+
+## Collect Results
+
+`collect` partitions every yielded value into successes and failures.
+
+```ts
+import { collect } from 'yeet'
+
+const { values, errors } = collect(function* () {
+  for (const item of items) {
+    yield processItem(item)
+  }
+})
+```
+
+No short-circuiting. No judgment. Just two arrays, standing there in the light.
+
+## Manual Folding
+
+If you want to drive a generator yourself, `fold` and `foldAsync` accept a
+`Strategy`:
+
+```ts
+type Strategy<Eff, Ret, Acc, R> = {
+  init: () => Acc
+  step: (eff: Eff, acc: Acc) => Step<Acc, R>
+  finish: (ret: Ret, acc: Acc) => R
+}
+```
+
+Everything higher-level in `yeet` is built from the same idea: initialize an
+accumulator, handle each yielded value, and finish when the generator returns.
+
+Most people will never need this. But it is there, because sometimes you want
+the keys to the old truck.
+
+## API
+
+```ts
+// Core
+left(error)
+right(value)
+isLeft(value)
+isRight(value)
+
+// Generator runners
+either(fn)
+validate(fn)
+firstOf(fn)
+collect(fn)
+
+// Guards and async helpers
+ensure(condition, onFail)
+ensureNotNull(value, onNull)
+raise(error)
+raise(promise)
+
+// Lower-level machinery
+fold(fn, strategy)
+foldAsync(generator, strategy)
+```
+
+`Left` and `Right` are small classes with `Symbol.iterator`, `toJSON`, and
+`Symbol.toPrimitive` support. They work nicely with `yield*`, JSON
+serialization, and straightforward tag checks.
 
 ## Why This Exists
 
-Every Result library asks you to learn a new language. Method chains. Pipe operators. Bespoke combinators for things you already know how to do.
+A lot of Result libraries ask you to learn a second little programming language:
+`map`, `flatMap`, `andThen`, `pipe`, `tap`, `mapErr`, `orElse`, and friends. Good
+tools, many of them. But sometimes you already have the best control-flow syntax
+available:
 
-This library asks you to learn nothing. If you know `yield*`, you already know everything. The errors flow through the types automatically. TypeScript sees what you yield and builds the union for you. No annotations. No ceremony.
+```ts
+if (!user.active) return raise('Inactive' as const)
+for (const item of items) yield processItem(item)
+tryAnotherThing()
+```
 
-`Left` and `Right` implement `Symbol.iterator`, `Symbol.toPrimitive`, and `toJSON`. They compose. They serialise. They behave.
+`yeet` leans on generators to make that style type-safe. The errors flow through
+the type system, the happy path reads top-to-bottom, and the runtime stays very
+small.
 
-_Some things in life just work. This is one of them._
+Some things in life should be boring in precisely the right way.
 
-## Benchmarks (vs. `better-result`)
+## Benchmarks
 
-> Apple M5, 24 GB
+There are Vitest benchmarks in `src/*.bench.ts`, plus a memory benchmark script.
 
-yeet - src/better-result.bench.ts > either — single yield, success
-1.04x faster than better-result
+```sh
+bun run bench
+bun run bench:quick
+bun run bench:memory
+```
 
-yeet - src/better-result.bench.ts > either — two yields, success
-1.08x faster than better-result
+These benchmarks are intentionally tiny and can be sensitive to runtime noise,
+JIT mood, and passing clouds. Treat them as directional, not holy scripture.
 
-yeet - src/better-result.bench.ts > either — single yield, short-circuit
-1.21x faster than better-result
+The current benchmark suite compares common `either` flows against
+`better-result`, and includes sync, async, short-circuit, validation, first
+success, and collection scenarios.
 
-yeet - src/better-result.bench.ts > either — complex nested checkout, success
-1.24x faster than better-result
-
-yeet - src/better-result.bench.ts > either async — two yields, success
-1.60x faster than better-result
-
-yeet - src/better-result.bench.ts > either async — single yield, short-circuit
-1.37x faster than better-result
-
----
+## License
 
 MIT
