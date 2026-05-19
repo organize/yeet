@@ -97,7 +97,7 @@ export class Left<E> {
     return { _tag: 'Left', error: toSerializedPayload(this.error) }
   }
 
-  [Symbol.toPrimitive](hint: 'string' | 'number' | 'default') {
+  [Symbol.toPrimitive](hint: 'string' | 'number' | 'default'): string | number {
     return hint === 'string' ? String(this.error) : Number.NaN
   }
 }
@@ -132,7 +132,7 @@ export class Right<A> {
     return { _tag: 'Right', value: toSerializedPayload(this.value) }
   }
 
-  [Symbol.toPrimitive](hint: 'string' | 'number' | 'default') {
+  [Symbol.toPrimitive](hint: 'string' | 'number' | 'default'): string | A {
     return hint === 'string' ? String(this.value) : this.value
   }
 }
