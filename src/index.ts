@@ -1,4 +1,4 @@
-export type { Either, InferE, InferA } from '#/either'
+export type { Either, InferE, InferA } from '#/either.js'
 export {
   Left,
   Right,
@@ -7,15 +7,15 @@ export {
   isLeft,
   isRight,
   isLeftReturn,
-} from '#/either'
+} from '#/either.js'
 
-export type { Step, Strategy } from '#/fold'
-export { fold, foldAsync } from '#/fold'
+export type { Step, Strategy } from '#/fold.js'
+export { fold, foldAsync } from '#/fold.js'
 
-export type { Rejected, Raise } from '#/async'
-export { rejected, raise } from '#/async'
+export type { Rejected, Raise } from '#/async.js'
+export { rejected, raise } from '#/async.js'
 
-export type { Collected, Check } from '#/combinators'
+export type { Collected, Check } from '#/combinators.js'
 export {
   either,
   capture,
@@ -25,4 +25,4 @@ export {
   collect,
   ensure,
   ensureNotNull,
-} from '#/combinators'
+} from '#/combinators.js'

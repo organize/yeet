@@ -1,8 +1,8 @@
 import { Result } from 'better-result'
 import { fullGC, gcAndSweep } from 'bun:jsc'
 
-import { either } from '../src/combinators'
-import { left, right, type Either } from '../src/either'
+import { either } from '../src/combinators.js'
+import { left, right, type Either } from '../src/either.js'
 
 const SYNC_ITERATIONS = Number(process.env['MEMORY_BENCH_SYNC'] ?? 200_000)
 const ASYNC_ITERATIONS = Number(process.env['MEMORY_BENCH_ASYNC'] ?? 50_000)

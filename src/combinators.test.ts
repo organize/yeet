@@ -8,8 +8,8 @@ import {
   collect,
   ensure,
   ensureNotNull,
-} from '#/combinators'
-import { left, right, type Either } from '#/either'
+} from '#/combinators.js'
+import { left, right, type Either } from '#/either.js'
 
 function expectLeft<E>(result: Either<E, unknown>, error: E) {
   expect(result._tag).toBe('Left')

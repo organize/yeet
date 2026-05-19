@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { left, right, isLeft, isRight, isLeftReturn } from '#/either'
+import { left, right, isLeft, isRight, isLeftReturn } from '#/either.js'
 
 describe('left / right constructors', () => {
   it('left holds the error value', () => {

@@ -3,10 +3,9 @@
     "rootDir": ".",
     "outDir": "./dist",
 
-    "module": "esnext",
-    "moduleResolution": "bundler",
+    "module": "nodenext",
     "target": "esnext",
-    "lib": ["esnext"],
+    "lib": ["ESNext"],
     "types": ["bun"],
 
     "sourceMap": true,
