@@ -4,6 +4,7 @@ import {
   type InferE,
   type InferA,
   type Left,
+  type Right,
   left,
   right,
 } from '#/either'
@@ -55,8 +56,9 @@ async function eitherAsync<Eff extends Either<any, any>, Ret>(
  *   control flow correctly — code after the `return` is unreachable, and
  *   guarded values (e.g. `if (!x) return raise(e)`) are narrowed on the happy
  *   path without requiring non-null assertions.
- * - `yield* await raise(promise)`: converts a raw `Promise<T>` rejection into
- *   `Left<Rejected>` so it can be short-circuited safely.
+ * - `yield* await raise(fn)` / `yield* await raise(promise)`: converts thrown
+ *   exceptions and rejected promises into `Left<Rejected>` so they can be
+ *   short-circuited safely.
  *
  * @param fn - A function that receives `raise` and returns a generator.
  *
@@ -100,6 +102,30 @@ export function either<Eff extends Either<any, any>, Ret>(
   }
 
   return finishEither(next.value)
+}
+
+/**
+ * Captures an {@link Either} as a normal value inside {@link either}, preventing
+ * a `Left` from short-circuiting until the caller decides what to do with it.
+ *
+ * Useful for retries, fallbacks, logging, or selectively re-raising errors with
+ * ordinary JavaScript control flow.
+ *
+ * @param e - The `Either` value to capture.
+ *
+ * @example
+ * ```ts
+ * const result = either(function* (raise) {
+ *   const cached = yield* capture(getFromCache(key))
+ *   if (cached._tag === "Right") return cached.value
+ *
+ *   if (cached.error !== "CacheMiss") return raise(cached.error)
+ *   return yield* getFromDatabase(key)
+ * })
+ * ```
+ */
+export function capture<E, A>(e: Either<E, A>): Right<Either<E, A>> {
+  return right(e)
 }
 
 /**

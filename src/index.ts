@@ -18,6 +18,7 @@ export { rejected, raise } from '#/async'
 export type { Collected, Check } from '#/combinators'
 export {
   either,
+  capture,
   validate,
   check,
   firstOf,

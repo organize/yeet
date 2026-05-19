@@ -113,7 +113,7 @@ const result = await either(async function* (raise) {
 })
 ```
 
-Raw promises that may reject can go through `raise(promise)`. Rejections become
+Promises and thenables can go through `raise(promiseLike)`. Rejections become
 `Left<Rejected>` instead of escaping as thrown exceptions.
 
 ```ts
@@ -126,10 +126,46 @@ const result = await either(async function* (raise) {
     return raise({ _tag: 'HttpError' as const, status: response.status })
   }
 
-  const data = yield* await raise(response.json() as Promise<unknown>)
+  const data = yield* await raise(() => response.json() as Promise<unknown>)
   return data
 })
 ```
+
+If starting the operation can throw synchronously, pass a function instead.
+`raise(fn)` uses `Promise.try`, so both synchronous throws and rejected promises
+become `Left<Rejected>`.
+
+```ts
+const config = yield * (await raise(() => JSON.parse(readConfigFile())))
+```
+
+## Capture Instead Of Short-Circuit
+
+Most of the time, `yield* left(...)` should stop the computation. Sometimes you
+want to catch that `Left` as data: retry, log, ignore, or decide whether to
+re-raise it yourself. That is what `capture` is for.
+
+```ts
+import { capture, either } from 'yeet'
+
+const result = either(function* (raise) {
+  const cached = yield* capture(getUserFromCache(id))
+
+  if (cached._tag === 'Right') {
+    return cached.value
+  }
+
+  if (cached.error !== 'CacheMiss') {
+    return raise(cached.error)
+  }
+
+  return yield* getUserFromDatabase(id)
+})
+```
+
+`capture(either)` returns `Right<Either<E, A>>`, which means the outer
+`either(...)` unwraps the `Right` and hands you the original `Either` as an
+ordinary value. A small trapdoor, tastefully installed.
 
 ## Small Guards
 
@@ -244,6 +280,7 @@ isRight(value)
 
 // Generator runners
 either(fn)
+capture(either)
 validate(fn)
 firstOf(fn)
 collect(fn)
@@ -252,7 +289,8 @@ collect(fn)
 ensure(condition, onFail)
 ensureNotNull(value, onNull)
 raise(error)
-raise(promise)
+raise(fn)
+raise(promiseLike)
 
 // Lower-level machinery
 fold(fn, strategy)

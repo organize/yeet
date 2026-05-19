@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   either,
+  capture,
   validate,
   firstOf,
   collect,
@@ -182,6 +183,92 @@ describe('either (async)', () => {
     const err = result.error
     expect(err._tag).toBe('Rejected')
     expect((err.cause as Error).message).toBe('Network error')
+  })
+
+  it('raise(fn) captures a synchronous return as Right', async () => {
+    const result = await either(async function* (raise) {
+      const data = yield* await raise(() => 'hello' as const)
+      return data
+    })
+
+    expectRight(result, 'hello')
+  })
+
+  it('raise(fn) captures a synchronous throw as Left<Rejected>', async () => {
+    const cause = new Error('Sync explosion')
+    const result = await either(async function* (raise) {
+      const data = yield* await raise(() => {
+        throw cause
+      })
+      return data
+    })
+
+    expect(result._tag).toBe('Left')
+    if (result._tag !== 'Left') return
+    expect(result.error._tag).toBe('Rejected')
+    expect(result.error.cause).toBe(cause)
+  })
+
+  it('raise(fn) captures a returned rejected promise as Left<Rejected>', async () => {
+    const cause = new Error('Async explosion')
+    const result = await either(async function* (raise) {
+      const data = yield* await raise(async () => {
+        throw cause
+      })
+      return data
+    })
+
+    expect(result._tag).toBe('Left')
+    if (result._tag !== 'Left') return
+    expect(result.error._tag).toBe('Rejected')
+    expect(result.error.cause).toBe(cause)
+  })
+
+  it('raise(thenable) captures custom thenables', async () => {
+    const thenable = {
+      // oxlint-disable-next-line unicorn/no-thenable
+      then(resolve: (value: string) => void) {
+        resolve('from-thenable')
+      },
+    } as PromiseLike<string>
+
+    const result = await either(async function* (raise) {
+      const data = yield* await raise(thenable)
+      return data
+    })
+
+    expectRight(result, 'from-thenable')
+  })
+})
+
+describe('capture', () => {
+  it('captures a Left as a value instead of short-circuiting', () => {
+    const result = either(function* () {
+      const cached = yield* capture(left('CacheMiss' as const))
+      if (cached._tag === 'Left') return 'fallback' as const
+      return cached.value
+    })
+
+    expectRight(result, 'fallback')
+  })
+
+  it('allows a captured Left to be re-raised explicitly', () => {
+    const result = either(function* (raise) {
+      const cached = yield* capture(left('CacheMiss' as const))
+      if (cached._tag === 'Left') return raise(cached.error)
+      return cached.value
+    })
+
+    expectLeft(result, 'CacheMiss')
+  })
+
+  it('captures a Right without changing its value', () => {
+    const result = either(function* () {
+      const value = yield* capture(right(42))
+      return value._tag === 'Right' ? value.value : 0
+    })
+
+    expectRight(result, 42)
   })
 })
 
