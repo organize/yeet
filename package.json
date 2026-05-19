@@ -1,8 +1,23 @@
 {
   "name": "yeet",
   "version": "0.1.0",
-  "description": "Generator-based Either monad for TypeScript",
+  "description": "Tiny, performant, dependency-free `Either` monad for TypeScript",
+  "keywords": [
+    "either",
+    "generator",
+    "performant",
+    "type-safe",
+    "type-safe-errors"
+  ],
+  "bugs": {
+    "url": "https://github.com/organize/yeet/issues"
+  },
   "license": "MIT",
+  "author": "organize <adam@evil.community> (https://github.com/organize)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/organize/yeet.git"
+  },
   "files": [
     "dist"
   ],
