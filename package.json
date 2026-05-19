@@ -1,5 +1,5 @@
 {
-  "name": "yeet",
+  "name": "@big-time/yeet",
   "version": "0.1.0",
   "description": "Tiny, performant, dependency-free `Either` monad for TypeScript",
   "keywords": [
@@ -9,6 +9,7 @@
     "type-safe",
     "type-safe-errors"
   ],
+  "homepage": "https://github.com/organize/yeet#readme",
   "bugs": {
     "url": "https://github.com/organize/yeet/issues"
   },

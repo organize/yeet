@@ -38,10 +38,10 @@ const result = either(function* (raise) {
 ## Install
 
 ```sh
-npm install yeet
-pnpm add yeet
-yarn add yeet
-bun add yeet
+npm install @big-time/yeet
+pnpm add @big-time/yeet
+yarn add @big-time/yeet
+bun add @big-time/yeet
 ```
 
 `yeet` is ESM, ships TypeScript declarations, and has zero runtime
