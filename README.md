@@ -220,7 +220,7 @@ you can bring Zod, Valibot, ArkType, TypeBox adapters, or whatever your project
 already uses. `yeet` does not import any of them. It merely checks for
 `~standard` and lets the grown-ups speak for themselves.
 
-With Zod, this is the whole ceremony:
+With Zod, pass schemas directly when you want validation or hydration:
 
 ```ts
 import * as z from 'zod'
@@ -233,7 +233,7 @@ const ApiError = z.object({
 
 const User = z.object({
   id: z.string(),
-  email: z.string().email(),
+  email: z.email(),
 })
 
 type ApiError = z.infer<typeof ApiError>
@@ -273,6 +273,46 @@ if (hydrated.issues === undefined) {
 }
 ```
 
+For JSON Schema export, be explicit. Zod's documented API is
+`z.toJSONSchema(schema)`, with `{ io: 'input' }` when you need the input side of
+a transforming schema. Recent Zod versions may expose Standard JSON Schema
+directly, but a tiny adapter keeps the README honest and lets you use Zod's
+conversion options.
+
+```ts
+import * as z from 'zod'
+import {
+  serializedEitherSchema,
+  type StandardJSONSchemaOptions,
+  type StandardJSONSchemaV1,
+  type StandardSchemaV1,
+} from 'yeet'
+
+const withZodJsonSchema = <Schema extends z.ZodType>(
+  schema: Schema,
+): StandardSchemaV1<z.input<Schema>, z.output<Schema>> &
+  StandardJSONSchemaV1<z.input<Schema>, z.output<Schema>> => ({
+  '~standard': {
+    ...schema['~standard'],
+    jsonSchema: {
+      input: (options: StandardJSONSchemaOptions) =>
+        z.toJSONSchema(schema, { target: options.target, io: 'input' }),
+      output: (options: StandardJSONSchemaOptions) =>
+        z.toJSONSchema(schema, { target: options.target }),
+    },
+  },
+})
+
+const SerializedUserResult = serializedEitherSchema({
+  error: withZodJsonSchema(ApiError),
+  value: withZodJsonSchema(User),
+})
+
+const jsonSchema = SerializedUserResult['~standard'].jsonSchema.output({
+  target: 'draft-2020-12',
+})
+```
+
 TypeBox and TypeMap fit the same hole. Compile or adapt the TypeBox schemas
 into validators that expose `~standard`, then pass them in:
 
@@ -301,18 +341,10 @@ const SerializedUserResult = serializedEitherSchema({
 })
 ```
 
-If the nested schemas also implement Standard JSON Schema, `yeet` will include
-their JSON Schema inside the exported `Either` envelope:
-
-```ts
-const jsonSchema = SerializedUserResult['~standard'].jsonSchema.output({
-  target: 'draft-2020-12',
-})
-```
-
-That gives you a portable JSON shape for API docs, structured outputs, form
-builders, or any other bit of software that enjoys receiving small rectangles
-of truth.
+When the nested schemas implement Standard JSON Schema, `yeet` includes their
+JSON Schema inside the exported `Either` envelope. That gives you a portable
+shape for API docs, structured outputs, form builders, or any other bit of
+software that enjoys receiving small rectangles of truth.
 
 Standard Schema and Standard JSON Schema are separate interfaces. If a nested
 schema only implements validation, validation still works; its JSON Schema slot
