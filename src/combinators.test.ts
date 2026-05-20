@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest'
 
+import { type Rejected } from '#/async.js'
 import {
   either,
   capture,
   validate,
   firstOf,
   collect,
+  all,
+  collectAll,
   ensure,
   ensureNotNull,
 } from '#/combinators.js'
@@ -122,6 +125,43 @@ const fetchOrders = async (
 const rawFetch = async (url: string): Promise<{ data: string }> => {
   if (url === '/bad') return Promise.reject(new Error('Network error'))
   return Promise.resolve({ data: 'hello' })
+}
+
+function deferred<T>(): {
+  promise: Promise<T>
+  resolve: (value: T) => void
+} {
+  let resolve: (value: T) => void = () => {}
+  const promise = new Promise<T>((res) => {
+    resolve = res
+  })
+  return { promise, resolve }
+}
+
+type TrackedDisposable = Disposable & { readonly name: string }
+type TrackedAsyncDisposable = AsyncDisposable & { readonly name: string }
+
+function disposable(name: string, events: string[]): TrackedDisposable {
+  return {
+    name,
+    [Symbol.dispose]() {
+      events.push(`dispose ${name}`)
+    },
+  }
+}
+
+function asyncDisposable(
+  name: string,
+  events: string[],
+): TrackedAsyncDisposable {
+  return {
+    name,
+    async [Symbol.asyncDispose]() {
+      events.push(`dispose ${name}:start`)
+      await Promise.resolve()
+      events.push(`dispose ${name}:end`)
+    },
+  }
 }
 
 describe('either (async)', () => {
@@ -241,6 +281,369 @@ describe('either (async)', () => {
   })
 })
 
+describe('either cleanup and thrown errors', () => {
+  it('runs finally when a sync Either short-circuits', () => {
+    const events: string[] = []
+
+    const result = either(function* () {
+      try {
+        events.push('enter')
+        yield* left('Stop' as const)
+      } finally {
+        events.push('finally')
+      }
+    })
+
+    expectLeft(result, 'Stop')
+    expect(events).toEqual(['enter', 'finally'])
+  })
+
+  it('runs finally when an async Either short-circuits', async () => {
+    const events: string[] = []
+
+    const result = await either(async function* () {
+      try {
+        events.push('enter')
+        yield* left('Stop' as const)
+      } finally {
+        events.push('finally:start')
+        await Promise.resolve()
+        events.push('finally:end')
+      }
+    })
+
+    expectLeft(result, 'Stop')
+    expect(events).toEqual(['enter', 'finally:start', 'finally:end'])
+  })
+
+  it('propagates thrown errors and still runs finally', () => {
+    const cause = new Error('boom after yield')
+    const events: string[] = []
+
+    let thrown: unknown
+    try {
+      either(function* () {
+        try {
+          events.push('enter')
+          yield* right(1)
+          events.push('after-yield')
+          throw cause
+        } finally {
+          events.push('finally')
+        }
+      })
+    } catch (error) {
+      thrown = error
+    }
+
+    expect(thrown).toBe(cause)
+    expect(events).toEqual(['enter', 'after-yield', 'finally'])
+  })
+
+  it('propagates errors thrown before the first yield and still runs finally', () => {
+    const cause = new Error('boom before yield')
+    const events: string[] = []
+    const shouldThrow = () => true
+
+    let thrown: unknown
+    try {
+      either(function* () {
+        try {
+          events.push('enter')
+          if (shouldThrow()) throw cause
+          yield* right(1)
+        } finally {
+          events.push('finally')
+        }
+      })
+    } catch (error) {
+      thrown = error
+    }
+
+    expect(thrown).toBe(cause)
+    expect(events).toEqual(['enter', 'finally'])
+  })
+
+  it('lets finally errors override a sync short-circuit', () => {
+    const cause = new Error('finally exploded')
+    const events: string[] = []
+
+    let thrown: unknown
+    try {
+      either(function* () {
+        try {
+          events.push('enter')
+          yield* left('Stop' as const)
+        } finally {
+          events.push('finally')
+          // eslint-disable-next-line no-unsafe-finally
+          throw cause
+        }
+      })
+    } catch (error) {
+      thrown = error
+    }
+
+    expect(thrown).toBe(cause)
+    expect(events).toEqual(['enter', 'finally'])
+  })
+
+  it('disposes sync using resources on success, short-circuit, and throw', () => {
+    const events: string[] = []
+
+    const success = either(function* () {
+      using resource = disposable('success', events)
+      events.push(resource.name)
+      return yield* right(1)
+    })
+
+    const shortCircuit = either(function* () {
+      using resource = disposable('short', events)
+      events.push(resource.name)
+      return yield* left('Stop' as const)
+    })
+
+    const cause = new Error('using throw')
+    let thrown: unknown
+    try {
+      either(function* () {
+        using resource = disposable('throw', events)
+        events.push(resource.name)
+        yield* right(undefined)
+        throw cause
+      })
+    } catch (error) {
+      thrown = error
+    }
+
+    expectRight(success, 1)
+    expectLeft(shortCircuit, 'Stop')
+    expect(thrown).toBe(cause)
+    expect(events).toEqual([
+      'success',
+      'dispose success',
+      'short',
+      'dispose short',
+      'throw',
+      'dispose throw',
+    ])
+  })
+
+  it('awaits async disposal on await using resources', async () => {
+    const events: string[] = []
+
+    const success = await either(async function* () {
+      await using resource = asyncDisposable('success', events)
+      events.push(resource.name)
+      return yield* right(1)
+    })
+
+    const shortCircuit = await either(async function* () {
+      await using resource = asyncDisposable('short', events)
+      events.push(resource.name)
+      return yield* left('Stop' as const)
+    })
+
+    const cause = new Error('await using throw')
+    let thrown: unknown
+    try {
+      await either(async function* () {
+        await using resource = asyncDisposable('throw', events)
+        events.push(resource.name)
+        yield* right(undefined)
+        throw cause
+      })
+    } catch (error) {
+      thrown = error
+    }
+
+    expectRight(success, 1)
+    expectLeft(shortCircuit, 'Stop')
+    expect(thrown).toBe(cause)
+    expect(events).toEqual([
+      'success',
+      'dispose success:start',
+      'dispose success:end',
+      'short',
+      'dispose short:start',
+      'dispose short:end',
+      'throw',
+      'dispose throw:start',
+      'dispose throw:end',
+    ])
+  })
+})
+
+describe('all', () => {
+  it('returns Right with a tuple when every sync Either is Right', () => {
+    const result = all([right(1), right('two'), right(true)])
+    const typed: Either<never, [number, string, boolean]> = result
+
+    expect(typed).toBe(result)
+    expectRight(result, [1, 'two', true])
+  })
+
+  it('returns Right with an empty tuple when given no inputs', () => {
+    const result = all([])
+
+    expectRight(result, [])
+  })
+
+  it('returns the first sync Left by input order', () => {
+    const result = all([
+      right(1),
+      left('first' as const),
+      left('second' as const),
+    ])
+
+    expectLeft(result, 'first')
+  })
+
+  it('runs promise inputs concurrently and preserves tuple order', async () => {
+    const first = deferred<Either<'FirstFailed', number>>()
+    const second = deferred<Either<'SecondFailed', string>>()
+    const resultPromise = all([first.promise, second.promise])
+
+    second.resolve(right('two'))
+    first.resolve(right(1))
+
+    const result = await resultPromise
+
+    expectRight(result, [1, 'two'])
+  })
+
+  it('returns the first async Left by input order, not resolution order', async () => {
+    const first = deferred<Either<'FirstFailed', number>>()
+    const second = deferred<Either<'SecondFailed', string>>()
+    const resultPromise = all([first.promise, second.promise])
+
+    second.resolve(left('SecondFailed' as const))
+    first.resolve(left('FirstFailed' as const))
+
+    const result = await resultPromise
+
+    expectLeft(result, 'FirstFailed')
+  })
+
+  it('handles mixed promises, eithers, and thunks', async () => {
+    const resultPromise = all([
+      right(1),
+      Promise.resolve(right('two')),
+      () => right(true),
+    ])
+    const typed: Promise<Either<Rejected, [number, string, boolean]>> =
+      resultPromise
+
+    expect(typed).toBe(resultPromise)
+    const result = await resultPromise
+
+    expectRight(result, [1, 'two', true])
+  })
+
+  it('captures promise rejections as Rejected Left values', async () => {
+    const cause = new Error('Promise failed')
+    const rejectedInput: Promise<Either<never, string>> = Promise.reject(cause)
+
+    const result = await all([right(1), rejectedInput])
+
+    expect(result._tag).toBe('Left')
+    if (result._tag !== 'Left') return
+    expect(result.error._tag).toBe('Rejected')
+    expect(result.error.cause).toBe(cause)
+  })
+
+  it('captures synchronous throws from thunks as Rejected Left values', () => {
+    const cause = new Error('Thunk failed')
+    const fail = (): Either<never, never> => {
+      throw cause
+    }
+    const result = all([right(1), fail, right(3)])
+
+    expect(result._tag).toBe('Left')
+    if (result._tag !== 'Left') return
+    expect(result.error._tag).toBe('Rejected')
+    expect(result.error.cause).toBe(cause)
+  })
+
+  it('captures rejected promises returned from thunks', async () => {
+    const cause = new Error('Thunk promise failed')
+    const fail = async (): Promise<Either<never, string>> => {
+      throw cause
+    }
+    const result = await all([right(1), fail])
+
+    expect(result._tag).toBe('Left')
+    if (result._tag !== 'Left') return
+    expect(result.error._tag).toBe('Rejected')
+    expect(result.error.cause).toBe(cause)
+  })
+
+  it('invokes thunk inputs before awaiting async results', async () => {
+    const calls: string[] = []
+    const first = deferred<Either<never, number>>()
+    const resultPromise = all([
+      async () => {
+        calls.push('first')
+        return first.promise
+      },
+      () => {
+        calls.push('second')
+        return right('two')
+      },
+    ])
+
+    expect(calls).toEqual(['first', 'second'])
+
+    first.resolve(right(1))
+    const result = await resultPromise
+
+    expectRight(result, [1, 'two'])
+  })
+})
+
+describe('collectAll', () => {
+  it('partitions sync Eithers without short-circuiting', () => {
+    const result = collectAll([
+      right(1),
+      left('first' as const),
+      right(2),
+      left('second' as const),
+    ])
+
+    expect(result.values).toEqual([1, 2])
+    expect(result.errors).toEqual(['first', 'second'])
+  })
+
+  it('partitions async results and captures thrown or rejected failures', async () => {
+    const rejectedCause = new Error('Promise failed')
+    const thrownCause = new Error('Thunk failed')
+    const rejectedInput: Promise<Either<never, number>> =
+      Promise.reject(rejectedCause)
+
+    const result = await collectAll([
+      Promise.resolve(right(1)),
+      left('plain-error' as const),
+      rejectedInput,
+      () => {
+        throw thrownCause
+      },
+      async () => right(2),
+    ])
+
+    expect(result.values).toEqual([1, 2])
+    expect(result.errors).toHaveLength(3)
+    expect(result.errors[0]).toBe('plain-error')
+    expect(result.errors[1]).toEqual({
+      _tag: 'Rejected',
+      cause: rejectedCause,
+    })
+    expect(result.errors[2]).toEqual({
+      _tag: 'Rejected',
+      cause: thrownCause,
+    })
+  })
+})
+
 describe('capture', () => {
   it('captures a Left as a value instead of short-circuiting', () => {
     const result = either(function* () {
@@ -347,6 +750,24 @@ describe('firstOf', () => {
 
     expectRight(result, 'instant')
     expect(called).toBe(false)
+  })
+
+  it('closes the generator when the first Right short-circuits', () => {
+    const events: string[] = []
+
+    const result = firstOf(function* () {
+      try {
+        events.push('enter')
+        yield right('instant')
+        events.push('after')
+        yield fromApi()
+      } finally {
+        events.push('finally')
+      }
+    })
+
+    expectRight(result, 'instant')
+    expect(events).toEqual(['enter', 'finally'])
   })
 })
 

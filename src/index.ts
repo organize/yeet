@@ -40,7 +40,16 @@ export { fold, foldAsync } from '#/fold.js'
 export type { Rejected, Raise } from '#/async.js'
 export { rejected, raise } from '#/async.js'
 
-export type { Collected, Check } from '#/combinators.js'
+export type {
+  Collected,
+  Check,
+  AllInput,
+  AllError,
+  AllValue,
+  AllValues,
+  AllResult,
+  CollectAllResult,
+} from '#/combinators.js'
 export {
   either,
   capture,
@@ -48,6 +57,8 @@ export {
   check,
   firstOf,
   collect,
+  all,
+  collectAll,
   ensure,
   ensureNotNull,
 } from '#/combinators.js'

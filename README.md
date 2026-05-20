@@ -139,6 +139,79 @@ become `Left<Rejected>`.
 const config = yield * (await raise(() => JSON.parse(readConfigFile())))
 ```
 
+## Concurrent All
+
+Normal `yield* await` code is sequential. That is usually what you want, but
+sometimes two independent things should begin their little journeys at the same
+time.
+
+`all` accepts `Either`, `Promise<Either>`, or thunks that return either of
+those. Async inputs are observed concurrently. Promise rejections and synchronous
+throws from thunks become `Left<Rejected>`.
+
+```ts
+import { all, collectAll, either } from 'yeet'
+
+const result = await either(async function* () {
+  const [user, settings] = yield* await all([fetchUser(id), fetchSettings(id)])
+
+  return { user, settings }
+})
+```
+
+The result is tuple-shaped, so each success keeps its own type:
+
+```ts
+const result = await all([
+  right(1),
+  Promise.resolve(right('two')),
+  () => right(true),
+])
+
+// Either<Rejected, [number, string, boolean]>
+```
+
+For async failures, `all` waits for the inputs to settle, then returns the first
+`Left` by input order. No race-condition fortune telling.
+
+```ts
+const result = await all([
+  fetchSlowThing(), // eventually Left("SlowFailed")
+  fetchFastThing(), // eventually Left("FastFailed")
+])
+
+// Left("SlowFailed")
+```
+
+If the work itself can throw while starting, use thunks:
+
+```ts
+const result = await all([() => parseConfigFile(), () => fetchSettings()])
+```
+
+`all` expects each input to produce an `Either`. For raw promises, wrap them with
+`raise` so rejection still becomes data:
+
+```ts
+const result = await either(async function* (raise) {
+  const [user, settings] = yield* await all([
+    raise(fetch('/api/user')),
+    raise(fetch('/api/settings')),
+  ])
+
+  return { user, settings }
+})
+```
+
+`collectAll` is the sibling that does not short-circuit. It runs the same inputs
+and partitions everything:
+
+```ts
+const { values, errors } = await collectAll(
+  ids.map((id) => () => fetchUser(id)),
+)
+```
+
 ## Capture Instead Of Short-Circuit
 
 Most of the time, `yield* left(...)` should stop the computation. Sometimes you
@@ -478,6 +551,8 @@ capture(either)
 validate(fn)
 firstOf(fn)
 collect(fn)
+all(inputs)
+collectAll(inputs)
 
 // Serialization and schemas
 fromJSON(value)

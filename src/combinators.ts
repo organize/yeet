@@ -1,4 +1,4 @@
-import { type Raise, raise } from '#/async.js'
+import { type Raise, type Rejected, raise, rejected } from '#/async.js'
 import {
   type Either,
   type InferE,
@@ -26,7 +26,10 @@ function eitherSyncContinue<Eff extends Either<any, any>, Ret>(
   let next = gen.next(value)
   while (!next.done) {
     const eff = next.value
-    if (eff._tag === 'Left') return eff
+    if (eff._tag === 'Left') {
+      closeSyncGenerator(gen)
+      return eff
+    }
     next = gen.next(eff.value)
   }
   return finishEither(next.value)
@@ -38,10 +41,23 @@ async function eitherAsync<Eff extends Either<any, any>, Ret>(
   let next = await gen.next()
   while (!next.done) {
     const eff = next.value
-    if (eff._tag === 'Left') return eff
+    if (eff._tag === 'Left') {
+      await closeAsyncGenerator(gen)
+      return eff
+    }
     next = await gen.next(eff.value)
   }
   return finishEither(next.value)
+}
+
+function closeSyncGenerator(gen: Generator<any, any, unknown>): void {
+  gen.return(undefined)
+}
+
+async function closeAsyncGenerator(
+  gen: AsyncGenerator<any, any, unknown>,
+): Promise<void> {
+  await gen.return(undefined)
 }
 
 /**
@@ -97,7 +113,10 @@ export function either<Eff extends Either<any, any>, Ret>(
   const next = gen.next()
   if (!next.done) {
     const eff = next.value
-    if (eff._tag === 'Left') return eff
+    if (eff._tag === 'Left') {
+      closeSyncGenerator(gen)
+      return eff
+    }
     return eitherSyncContinue(gen, eff.value)
   }
 
@@ -208,7 +227,10 @@ export function firstOf<Eff extends Either<any, any>, Ret>(
 
   while (!next.done) {
     const eff = next.value
-    if (eff._tag === 'Right') return right(eff.value)
+    if (eff._tag === 'Right') {
+      closeSyncGenerator(gen)
+      return right(eff.value)
+    }
     ;(errors ??= []).push(eff.error)
     next = gen.next()
   }
@@ -255,6 +277,199 @@ export function collect<Eff extends Either<any, any>>(
   }
 
   return { errors, values }
+}
+
+/**
+ * A value or thunk accepted by {@link all} and {@link collectAll}.
+ *
+ * Promise rejections, rejected thenables, and synchronous throws from thunks
+ * are captured as `Left<Rejected>`.
+ */
+export type AllInput<E = unknown, A = unknown> =
+  | Either<E, A>
+  | PromiseLike<Either<E, A>>
+  | (() => Either<E, A> | PromiseLike<Either<E, A>>)
+
+type AwaitedAllInput<T> = T extends () => infer R ? Awaited<R> : Awaited<T>
+
+/** Extracts the error type from an {@link AllInput}. */
+export type AllError<T> = InferE<AwaitedAllInput<T>>
+
+/** Extracts the success type from an {@link AllInput}. */
+export type AllValue<T> = InferA<AwaitedAllInput<T>>
+
+/** Tuple of success values produced by {@link all}. */
+export type AllValues<T extends readonly unknown[]> = {
+  -readonly [K in keyof T]: AllValue<T[K]>
+}
+
+type IsAsyncAllInput<T> = T extends () => infer R
+  ? R extends PromiseLike<unknown>
+    ? true
+    : false
+  : T extends PromiseLike<unknown>
+    ? true
+    : false
+
+type HasAsyncAllInput<T extends readonly unknown[]> = true extends {
+  [K in keyof T]: IsAsyncAllInput<T[K]>
+}[number]
+  ? true
+  : false
+
+type CanRejectAllInput<T> = T extends PromiseLike<unknown> | (() => unknown)
+  ? true
+  : false
+
+type HasRejectableAllInput<T extends readonly unknown[]> = true extends {
+  [K in keyof T]: CanRejectAllInput<T[K]>
+}[number]
+  ? true
+  : false
+
+type AllResultError<T extends readonly unknown[]> =
+  | AllError<T[number]>
+  | (HasRejectableAllInput<T> extends true ? Rejected : never)
+
+/** Return type produced by {@link all}. */
+export type AllResult<T extends readonly AllInput<any, any>[]> =
+  HasAsyncAllInput<T> extends true
+    ? Promise<Either<AllResultError<T>, AllValues<T>>>
+    : Either<AllResultError<T>, AllValues<T>>
+
+/** Return type produced by {@link collectAll}. */
+export type CollectAllResult<T extends readonly AllInput<any, any>[]> =
+  HasAsyncAllInput<T> extends true
+    ? Promise<Collected<AllResultError<T>, AllValue<T[number]>>>
+    : Collected<AllResultError<T>, AllValue<T[number]>>
+
+/**
+ * Runs `Either` values and `Promise<Either>` values together, returning the
+ * first `Left` by input order or all success values as a tuple.
+ *
+ * Async inputs are observed concurrently with `Promise.all`. Promise rejections
+ * and synchronous throws from thunk inputs are captured as `Left<Rejected>`.
+ *
+ * @param inputs - Eithers, promises of Eithers, or thunks that produce them.
+ *
+ * @example
+ * ```ts
+ * const result = await either(async function* () {
+ *   const [user, settings] = yield* await all([
+ *     fetchUser(id),
+ *     fetchSettings(id),
+ *   ])
+ *
+ *   return { user, settings }
+ * })
+ * ```
+ */
+export function all<const T extends readonly AllInput<any, any>[]>(
+  inputs: T,
+): AllResult<T> {
+  const settled: (Either<any, any> | Promise<Either<any, any>>)[] = []
+  settled.length = inputs.length
+  let hasAsync = false
+
+  for (let index = 0; index < inputs.length; index++) {
+    const input = inputs[index] as AllInput<any, any>
+    const value = settleAllInput(input)
+    settled[index] = value
+    if (isPromiseLike(value)) hasAsync = true
+  }
+
+  if (hasAsync) {
+    return Promise.all(settled as readonly Promise<Either<any, any>>[]).then(
+      finishAll,
+    ) as AllResult<T>
+  }
+
+  return finishAll(settled as Either<any, any>[]) as AllResult<T>
+}
+
+/**
+ * Runs `Either` values and `Promise<Either>` values together, partitioning all
+ * successes and failures without short-circuiting.
+ *
+ * Async inputs are observed concurrently with `Promise.all`. Promise rejections
+ * and synchronous throws from thunk inputs are captured as `Rejected` errors.
+ *
+ * @param inputs - Eithers, promises of Eithers, or thunks that produce them.
+ */
+export function collectAll<const T extends readonly AllInput<any, any>[]>(
+  inputs: T,
+): CollectAllResult<T> {
+  const settled: (Either<any, any> | Promise<Either<any, any>>)[] = []
+  settled.length = inputs.length
+  let hasAsync = false
+
+  for (let index = 0; index < inputs.length; index++) {
+    const input = inputs[index] as AllInput<any, any>
+    const value = settleAllInput(input)
+    settled[index] = value
+    if (isPromiseLike(value)) hasAsync = true
+  }
+
+  if (hasAsync) {
+    return Promise.all(settled as readonly Promise<Either<any, any>>[]).then(
+      finishCollectAll,
+    ) as CollectAllResult<T>
+  }
+
+  return finishCollectAll(settled as Either<any, any>[]) as CollectAllResult<T>
+}
+
+function settleAllInput(
+  input: AllInput<any, any>,
+): Either<any, any> | Promise<Either<any, any>> {
+  try {
+    const value = typeof input === 'function' ? input() : input
+    if (isPromiseLike(value)) {
+      return Promise.resolve(value).then(undefined, (cause) =>
+        left(rejected(cause)),
+      )
+    }
+    return value
+  } catch (cause) {
+    return left(rejected(cause))
+  }
+}
+
+function finishAll(results: readonly Either<any, any>[]): Either<any, any[]> {
+  for (let index = 0; index < results.length; index++) {
+    const result = results[index] as Either<any, any>
+    if (result._tag === 'Left') return result
+  }
+
+  const values: any[] = []
+  values.length = results.length
+  for (let index = 0; index < results.length; index++) {
+    values[index] = (results[index] as Right<any>).value
+  }
+  return right(values)
+}
+
+function finishCollectAll(
+  results: readonly Either<any, any>[],
+): Collected<any, any> {
+  const errors: any[] = []
+  const values: any[] = []
+
+  for (let index = 0; index < results.length; index++) {
+    const result = results[index] as Either<any, any>
+    if (result._tag === 'Left') errors.push(result.error)
+    else values.push(result.value)
+  }
+
+  return { errors, values }
+}
+
+function isPromiseLike<T>(value: unknown): value is PromiseLike<T> {
+  return (
+    (typeof value === 'object' || typeof value === 'function') &&
+    value !== null &&
+    typeof (value as { readonly then?: unknown }).then === 'function'
+  )
 }
 
 /**
