@@ -15,6 +15,9 @@ export const rejected = (cause: unknown): Rejected => ({
   cause,
 })
 
+export const toRejectedLeft = (cause: unknown): Left<Rejected> =>
+  left(rejected(cause))
+
 /**
  * Represents an `AbortSignal` cancellation captured as a typed `Left` value.
  * Produced by `either(signal, async function* () { ... })` when the signal
@@ -66,7 +69,7 @@ export function raise(
   x: unknown,
 ): Promise<Either<Rejected, unknown>> | Left<any> {
   if (typeof x === 'function') {
-    return Promise.try(x as () => unknown).then(right, (e) => left(rejected(e)))
+    return Promise.try(x as () => unknown).then(right, toRejectedLeft)
   }
 
   if (typeof x === 'object' && x !== null) {
@@ -74,11 +77,11 @@ export function raise(
     try {
       then = (x as { readonly then?: unknown }).then
     } catch {
-      return Promise.try(() => x).then(right, (e) => left(rejected(e)))
+      return Promise.try(() => x).then(right, toRejectedLeft)
     }
 
     if (typeof then === 'function') {
-      return Promise.try(() => x).then(right, (e) => left(rejected(e)))
+      return Promise.try(() => x).then(right, toRejectedLeft)
     }
   }
 

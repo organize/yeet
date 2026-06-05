@@ -230,18 +230,20 @@ export function isLeftReturn<T>(value: T): value is Extract<T, Left<any>> {
   return (
     value !== null &&
     typeof value === 'object' &&
-    '_tag' in value &&
-    value._tag === 'Left'
+    (value as { readonly _tag?: unknown })._tag === 'Left'
   )
 }
 
 function toSerializedPayload<T>(
   value: T,
-  seen = new WeakSet<object>(),
+  seen?: WeakSet<object>,
 ): SerializedPayload<T> {
   if (hasToJSON(value)) return value.toJSON() as SerializedPayload<T>
   if (value instanceof Error)
-    return serializeError(value, seen) as SerializedPayload<T>
+    return serializeError(
+      value,
+      seen ?? new WeakSet<object>(),
+    ) as SerializedPayload<T>
   return value as SerializedPayload<T>
 }
 

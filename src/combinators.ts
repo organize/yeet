@@ -4,7 +4,7 @@ import {
   type Rejected,
   aborted,
   raise,
-  rejected,
+  toRejectedLeft,
 } from './async.ts'
 import {
   type Either,
@@ -15,6 +15,8 @@ import {
   left,
   right,
 } from './either.ts'
+
+const RIGHT_VOID = right(undefined) as Right<void>
 
 type MaybeLeft = { readonly _tag?: unknown }
 
@@ -523,13 +525,11 @@ function settleAllInput(
   try {
     const value = typeof input === 'function' ? input() : input
     if (isPromiseLike(value)) {
-      return Promise.resolve(value).then(undefined, (cause) =>
-        left(rejected(cause)),
-      )
+      return Promise.resolve(value).then(undefined, toRejectedLeft)
     }
     return value
   } catch (cause) {
-    return left(rejected(cause))
+    return toRejectedLeft(cause)
   }
 }
 
@@ -581,7 +581,7 @@ export function ensure<const E>(
   cond: boolean,
   onFail: () => E,
 ): Either<E, void> {
-  return cond ? right(undefined) : left(onFail())
+  return cond ? RIGHT_VOID : left(onFail())
 }
 
 /**
