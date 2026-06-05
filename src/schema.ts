@@ -13,7 +13,6 @@ export type StandardSchemaResult<Output> =
   | { readonly value: Output; readonly issues?: undefined }
   | { readonly issues: ReadonlyArray<StandardSchemaIssue> }
 
-/** A dependency-free copy of the Standard Schema v1 interface. */
 export type StandardSchemaV1<Input = unknown, Output = Input> = {
   readonly '~standard': {
     readonly version: 1
@@ -26,7 +25,6 @@ export type StandardSchemaV1<Input = unknown, Output = Input> = {
   }
 }
 
-/** A dependency-free copy of the Standard JSON Schema v1 interface. */
 export type StandardJSONSchemaV1<Input = unknown, Output = Input> = {
   readonly '~standard': {
     readonly version: 1
@@ -39,14 +37,12 @@ export type StandardJSONSchemaV1<Input = unknown, Output = Input> = {
   }
 }
 
-/** Options passed to Standard JSON Schema converters. */
 export type StandardJSONSchemaOptions = {
   readonly target: 'draft-2020-12' | 'draft-07' | 'openapi-3.0' | ({} & string)
   readonly libraryOptions?: Record<string, unknown>
 }
 
-/** A JSON Schema object. */
-export type JsonSchema = Record<string, unknown>
+type JsonSchema = Record<string, unknown>
 
 /** A Standard Schema that may also expose Standard JSON Schema conversion. */
 export type StandardSchemaWithOptionalJSONSchemaV1<

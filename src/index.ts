@@ -21,13 +21,6 @@ export {
 } from '#/either.js'
 
 export type {
-  StandardSchemaIssue,
-  StandardSchemaResult,
-  StandardSchemaV1,
-  StandardJSONSchemaV1,
-  StandardJSONSchemaOptions,
-  StandardSchemaWithOptionalJSONSchemaV1,
-  JsonSchema,
   EitherSchemaOptions,
   SerializedEitherSchema,
   EitherSchema,
