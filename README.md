@@ -1,10 +1,6 @@
 # yeet
 
-_Some say error handling is hard. They are not entirely wrong. But they have,
-perhaps, been using tools that make it feel like carrying furniture through a
-revolving door._
-
-`yeet` is a tiny, dependency-free `Either` library for TypeScript. It gives you
+`yeet` is a tiny (2.23 kB gzipped), dependency-free `Either` library for TypeScript. It gives you
 typed `Left` / `Right` values, generator-based do-notation, async support, and a
 few practical helpers for validation and fallback flows.
 
