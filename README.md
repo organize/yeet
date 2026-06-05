@@ -135,6 +135,43 @@ become `Left<Rejected>`.
 const config = yield * (await raise(() => JSON.parse(readConfigFile())))
 ```
 
+## Cancellation
+
+Pass an `AbortSignal` as the first argument to make an async `either` flow
+cooperatively cancellable. When the signal aborts, yeet returns
+`Left<Aborted>` and calls `gen.return()`, so `finally`, `using`, and
+`await using` cleanup get their turn.
+
+```ts
+const result = await either(signal, async function* (raise) {
+  using conn = yield* openConn()
+
+  const user = yield* await fetchUser(id, signal)
+  const avatar = yield* await raise(fetch(user.avatarUrl, { signal }))
+
+  return { user, avatar, conn }
+})
+```
+
+`Aborted` is deliberately small:
+
+```ts
+type Aborted = { readonly _tag: 'Aborted'; readonly reason: unknown }
+```
+
+This is regular JavaScript cancellation, which means it is cooperative. The
+driver can stop advancing the generator and unwind resources, but it cannot
+interrupt synchronous CPU-bound work, and it cannot cancel an in-flight promise
+unless that operation honors the same signal. Pass the signal to both layers:
+yeet for the flow boundary, your I/O for the actual work. Closing over the same
+`signal` keeps the call site honest without making the callback wear a second
+hat.
+
+If the current awaited operation ignores the signal, yeet requests
+`gen.return()` immediately, but the returned promise cannot settle until the
+generator reaches a point where JavaScript can unwind it. No magic trapdoor in
+the floorboards. Just honest cleanup.
+
 ## Concurrent All
 
 Normal `yield* await` code is sequential. That is usually what you want, but
@@ -543,6 +580,7 @@ isRight(value)
 
 // Generator runners
 either(fn)
+either(signal, asyncFn)
 capture(either)
 validate(fn)
 firstOf(fn)
@@ -562,6 +600,8 @@ ensureNotNull(value, onNull)
 raise(error)
 raise(fn)
 raise(promiseLike)
+aborted(reason)
+rejected(cause)
 
 // Lower-level machinery
 fold(fn, strategy)

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { type Rejected } from './async.ts'
+import { type Aborted, type Rejected } from './async.ts'
 import {
   either,
   capture,
@@ -162,6 +162,19 @@ function asyncDisposable(
       events.push(`dispose ${name}:end`)
     },
   }
+}
+
+async function abortAsLeft<const E>(
+  signal: AbortSignal,
+  error: E,
+): Promise<Either<E, never>> {
+  if (signal.aborted) return left(error)
+
+  return new Promise((resolve) => {
+    signal.addEventListener('abort', () => resolve(left(error)), {
+      once: true,
+    })
+  })
 }
 
 describe('either (async)', () => {
@@ -470,6 +483,93 @@ describe('either cleanup and thrown errors', () => {
       'throw',
       'dispose throw:start',
       'dispose throw:end',
+    ])
+  })
+})
+
+describe('either cancellation', () => {
+  it('returns Right when the signal never aborts', async () => {
+    const controller = new AbortController()
+
+    const result = await either(controller.signal, async function* () {
+      expect(controller.signal.aborted).toBe(false)
+      return yield* right(1)
+    })
+
+    expectRight(result, 1)
+  })
+
+  it('returns Left<Aborted> without entering the generator when already aborted', async () => {
+    const controller = new AbortController()
+    const events: string[] = []
+    controller.abort('AlreadyDone')
+
+    const result = await either(controller.signal, async function* () {
+      events.push('enter')
+      return yield* right(1)
+    })
+    const typed: Either<Aborted, number> = result
+
+    expect(typed).toBe(result)
+    expectLeft(result, { _tag: 'Aborted', reason: 'AlreadyDone' })
+    expect(events).toEqual([])
+  })
+
+  it('closes and disposes when a cooperating operation observes abort', async () => {
+    const controller = new AbortController()
+    const events: string[] = []
+
+    const resultPromise = either(controller.signal, async function* () {
+      await using resource = asyncDisposable('conn', events)
+      events.push(resource.name)
+      yield* await abortAsLeft(controller.signal, 'InnerAbort' as const)
+      events.push('after abort')
+      return 'done' as const
+    })
+
+    await Promise.resolve()
+    controller.abort('Stop')
+    const result = await resultPromise
+
+    expectLeft(result, { _tag: 'Aborted', reason: 'Stop' })
+    expect(events).toEqual(['conn', 'dispose conn:start', 'dispose conn:end'])
+  })
+
+  it('waits to unwind when the in-flight operation ignores the signal', async () => {
+    const controller = new AbortController()
+    const events: string[] = []
+    const ignored = deferred<Either<'LateLeft', never>>()
+    let settled = false
+
+    const resultPromise = either(controller.signal, async function* () {
+      await using resource = asyncDisposable('ignored', events)
+      events.push(resource.name)
+      yield* await ignored.promise
+      events.push('after ignored')
+      return 'done' as const
+    })
+    void resultPromise.then(() => {
+      settled = true
+    })
+
+    await Promise.resolve()
+    expect(events).toEqual(['ignored'])
+
+    controller.abort('Stop')
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(settled).toBe(false)
+    expect(events).toEqual(['ignored'])
+
+    ignored.resolve(left('LateLeft' as const))
+    const result = await resultPromise
+
+    expectLeft(result, { _tag: 'Aborted', reason: 'Stop' })
+    expect(events).toEqual([
+      'ignored',
+      'dispose ignored:start',
+      'dispose ignored:end',
     ])
   })
 })

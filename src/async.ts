@@ -16,6 +16,22 @@ export const rejected = (cause: unknown): Rejected => ({
 })
 
 /**
+ * Represents an `AbortSignal` cancellation captured as a typed `Left` value.
+ * Produced by `either(signal, async function* () { ... })` when the signal
+ * aborts while the async generator is running.
+ */
+export type Aborted = { readonly _tag: 'Aborted'; readonly reason: unknown }
+
+/**
+ * Constructs an {@link Aborted} value from an `AbortSignal` reason.
+ * @param reason - The value carried by `signal.reason`.
+ */
+export const aborted = (reason: unknown): Aborted => ({
+  _tag: 'Aborted',
+  reason,
+})
+
+/**
  * Polymorphic error injection for use inside `either` generators.
  *
  * - **`raise(promise)`**: wraps a `PromiseLike<T>` into

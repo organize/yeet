@@ -1,4 +1,11 @@
-import { type Raise, type Rejected, raise, rejected } from './async.ts'
+import {
+  type Aborted,
+  type Raise,
+  type Rejected,
+  aborted,
+  raise,
+  rejected,
+} from './async.ts'
 import {
   type Either,
   type InferE,
@@ -48,6 +55,76 @@ async function eitherAsync<Eff extends Either<any, any>, Ret>(
     next = await gen.next(eff.value)
   }
   return finishEither(next.value)
+}
+
+type AbortState = {
+  readonly signal: AbortSignal
+  readonly promise: Promise<Left<Aborted>>
+  readonly result: () => Left<Aborted>
+  readonly cleanup: () => void
+}
+
+type AbortableNext<Eff, Ret> = IteratorResult<Eff, Ret> | Left<Aborted>
+
+async function eitherAsyncAbortable<Eff extends Either<any, any>, Ret>(
+  gen: AsyncGenerator<Eff, Ret, unknown>,
+  signal: AbortSignal,
+): Promise<Either<any, any>> {
+  const abort = createAbortState(signal)
+  try {
+    let next = await nextOrAbort(gen, undefined, false, abort)
+    while (!isAbortResult(next) && !next.done) {
+      const eff = next.value
+      if (eff._tag === 'Left') {
+        await closeAsyncGenerator(gen)
+        return eff
+      }
+      next = await nextOrAbort(gen, eff.value, true, abort)
+    }
+
+    if (isAbortResult(next)) {
+      await closeAsyncGenerator(gen)
+      return next
+    }
+
+    return finishEither(next.value)
+  } finally {
+    abort.cleanup()
+  }
+}
+
+function createAbortState(signal: AbortSignal): AbortState {
+  const { promise, resolve } = Promise.withResolvers<Left<Aborted>>()
+  const result = () => left(aborted(signal.reason))
+  const onAbort = () => resolve(result())
+
+  if (signal.aborted) onAbort()
+  else signal.addEventListener('abort', onAbort, { once: true })
+
+  return {
+    signal,
+    promise,
+    result,
+    cleanup: () => signal.removeEventListener('abort', onAbort),
+  }
+}
+
+async function nextOrAbort<Eff extends Either<any, any>, Ret>(
+  gen: AsyncGenerator<Eff, Ret, unknown>,
+  value: unknown,
+  hasValue: boolean,
+  abort: AbortState,
+): Promise<AbortableNext<Eff, Ret>> {
+  if (abort.signal.aborted) return abort.result()
+
+  const next = hasValue ? gen.next(value) : gen.next()
+  return Promise.race([next, abort.promise])
+}
+
+function isAbortResult<Eff, Ret>(
+  result: AbortableNext<Eff, Ret>,
+): result is Left<Aborted> {
+  return !('done' in result)
 }
 
 function closeSyncGenerator(gen: Generator<any, any, unknown>): void {
@@ -101,11 +178,32 @@ export function either<Eff extends Either<any, any>, Ret>(
 >
 
 export function either<Eff extends Either<any, any>, Ret>(
-  fn: (
-    raise: Raise,
-  ) => Generator<Eff, Ret, unknown> | AsyncGenerator<Eff, Ret, unknown>,
+  signal: AbortSignal,
+  fn: (raise: Raise) => AsyncGenerator<Eff, Ret>,
+): Promise<
+  Either<
+    Aborted | InferE<Eff> | InferE<Extract<Ret, Left<any>>>,
+    Exclude<Ret, Left<any>>
+  >
+>
+
+export function either<Eff extends Either<any, any>, Ret>(
+  signalOrFn:
+    | AbortSignal
+    | ((
+        raise: Raise,
+      ) => Generator<Eff, Ret, unknown> | AsyncGenerator<Eff, Ret, unknown>),
+  fn?: (raise: Raise) => AsyncGenerator<Eff, Ret, unknown>,
 ): Either<any, any> | Promise<Either<any, any>> {
-  const gen = fn(raise)
+  if (typeof signalOrFn !== 'function') {
+    const gen = fn?.(raise)
+    if (gen === undefined) {
+      throw new TypeError('either(signal, fn) requires an async generator')
+    }
+    return eitherAsyncAbortable(gen, signalOrFn)
+  }
+
+  const gen = signalOrFn(raise)
   if (Symbol.asyncIterator in gen) {
     return eitherAsync(gen)
   }

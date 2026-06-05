@@ -30,8 +30,8 @@ export { serializedEitherSchema, eitherSchema } from './schema.ts'
 export type { Step, Strategy } from './fold.ts'
 export { fold, foldAsync } from './fold.ts'
 
-export type { Rejected, Raise } from './async.ts'
-export { rejected, raise } from './async.ts'
+export type { Aborted, Rejected, Raise } from './async.ts'
+export { aborted, rejected, raise } from './async.ts'
 
 export type {
   Collected,
