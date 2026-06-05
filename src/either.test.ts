@@ -8,14 +8,13 @@ import {
   isLeftReturn,
   fromJSON,
   isSerializedEither,
-} from '#/either.js'
+} from './either.ts'
 import {
-  type JsonSchema,
   type StandardJSONSchemaV1,
   type StandardSchemaV1,
   eitherSchema,
   serializedEitherSchema,
-} from '#/schema.js'
+} from './schema.js'
 
 const stringSchema = {
   '~standard': {
@@ -283,7 +282,7 @@ describe('serialization schemas', () => {
       target: 'draft-2020-12',
     })
 
-    expect(jsonSchema satisfies JsonSchema).toEqual({
+    expect(jsonSchema).toEqual({
       oneOf: [
         {
           type: 'object',

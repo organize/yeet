@@ -1,4 +1,4 @@
-import { type Either, Left, left, right } from '#/either.js'
+import { type Either, Left, left, right } from './either.ts'
 
 /**
  * Represents a `Promise` rejection captured as a typed `Left` value.

@@ -1,8 +1,8 @@
 import { bench, describe } from 'vitest'
 
-import { BENCH_OPTS } from '#/bench-options.js'
-import { either, validate, firstOf, collect } from '#/combinators.js'
-import { left, right, type Either } from '#/either.js'
+import { BENCH_OPTS } from './bench-options.ts'
+import { either, validate, firstOf, collect } from './combinators.ts'
+import { left, right, type Either } from './either.ts'
 
 type User = { id: string; name: string; active: boolean }
 type Order = { id: string; userId: string }

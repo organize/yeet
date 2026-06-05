@@ -1,6 +1,6 @@
 {
   "name": "@big-time/yeet",
-  "version": "0.1.2",
+  "version": "0.1.32",
   "description": "Tiny, performant, dependency-free `Either` monad for TypeScript",
   "keywords": [
     "either",
@@ -20,15 +20,15 @@
     "url": "git+https://github.com/organize/yeet.git"
   },
   "files": [
-    "dist"
+    "dist/index.d.mts",
+    "dist/index.d.mts.map",
+    "dist/index.mjs",
+    "dist/index.mjs.map"
   ],
   "type": "module",
   "main": "./dist/index.mjs",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.mts",
-  "imports": {
-    "#/*": "./src/*"
-  },
   "exports": {
     ".": {
       "types": "./dist/index.d.mts",

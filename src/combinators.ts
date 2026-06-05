@@ -1,4 +1,4 @@
-import { type Raise, type Rejected, raise, rejected } from '#/async.js'
+import { type Raise, type Rejected, raise, rejected } from './async.ts'
 import {
   type Either,
   type InferE,
@@ -7,7 +7,7 @@ import {
   type Right,
   left,
   right,
-} from '#/either.js'
+} from './either.ts'
 
 type MaybeLeft = { readonly _tag?: unknown }
 

@@ -18,4 +18,6 @@ export default defineConfig({
     ],
   },
   platform: 'neutral',
+  target: 'es2025',
+  fixedExtension: true,
 })

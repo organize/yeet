@@ -7,7 +7,7 @@ export type {
   SerializedLeft,
   SerializedRight,
   SerializedEither,
-} from '#/either.js'
+} from './either.ts'
 export {
   Left,
   Right,
@@ -18,20 +18,20 @@ export {
   isLeftReturn,
   fromJSON,
   isSerializedEither,
-} from '#/either.js'
+} from './either.ts'
 
 export type {
   EitherSchemaOptions,
   SerializedEitherSchema,
   EitherSchema,
-} from '#/schema.js'
-export { serializedEitherSchema, eitherSchema } from '#/schema.js'
+} from './schema.ts'
+export { serializedEitherSchema, eitherSchema } from './schema.ts'
 
-export type { Step, Strategy } from '#/fold.js'
-export { fold, foldAsync } from '#/fold.js'
+export type { Step, Strategy } from './fold.ts'
+export { fold, foldAsync } from './fold.ts'
 
-export type { Rejected, Raise } from '#/async.js'
-export { rejected, raise } from '#/async.js'
+export type { Rejected, Raise } from './async.ts'
+export { rejected, raise } from './async.ts'
 
 export type {
   Collected,
@@ -42,7 +42,7 @@ export type {
   AllValues,
   AllResult,
   CollectAllResult,
-} from '#/combinators.js'
+} from './combinators.ts'
 export {
   either,
   capture,
@@ -54,4 +54,4 @@ export {
   collectAll,
   ensure,
   ensureNotNull,
-} from '#/combinators.js'
+} from './combinators.ts'

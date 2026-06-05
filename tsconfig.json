@@ -1,12 +1,10 @@
 {
   "compilerOptions": {
-    "rootDir": ".",
-    "outDir": "./dist",
-
-    "module": "nodenext",
+    "module": "esnext",
     "target": "esnext",
     "lib": ["ESNext"],
     "types": ["bun"],
+    "moduleResolution": "bundler",
 
     "sourceMap": true,
     "declaration": true,
@@ -20,6 +18,9 @@
     "noUncheckedSideEffectImports": true,
     "moduleDetection": "force",
     "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "esModuleInterop": true,
 
     /* Strict */
     "strict": true,
@@ -33,10 +34,7 @@
     "noImplicitReturns": true,
     "noPropertyAccessFromIndexSignature": true,
     "allowUnusedLabels": false,
-    "allowUnreachableCode": false,
-    "paths": {
-      "#/*": ["./src/*"]
-    }
+    "allowUnreachableCode": false
   },
-  "include": ["src", "scripts"]
+  "include": ["src/**/*", "scripts"]
 }

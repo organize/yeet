@@ -1,4 +1,4 @@
-import { type Either, type SerializedEither, fromJSON } from '#/either.js'
+import { type Either, type SerializedEither, fromJSON } from './either.ts'
 
 const VENDOR = 'yeet'
 

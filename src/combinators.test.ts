@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { type Rejected } from '#/async.js'
+import { type Rejected } from './async.ts'
 import {
   either,
   capture,
@@ -11,8 +11,8 @@ import {
   collectAll,
   ensure,
   ensureNotNull,
-} from '#/combinators.js'
-import { left, right, type Either } from '#/either.js'
+} from './combinators.ts'
+import { left, right, type Either } from './either.ts'
 
 function expectLeft<E>(result: Either<E, unknown>, error: E) {
   expect(result._tag).toBe('Left')
