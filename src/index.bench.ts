@@ -1,7 +1,7 @@
 import { bench, describe } from 'vitest'
 
 import { BENCH_OPTS } from './bench-options.ts'
-import { either, validate, firstOf, collect } from './combinators.ts'
+import { __finish, either, validate, firstOf, collect } from './combinators.ts'
 import { left, right, type Either } from './either.ts'
 
 type User = { id: string; name: string; active: boolean }
@@ -63,12 +63,44 @@ describe('either (sync)', () => {
   )
 
   bench(
+    'two yields, success (unplugin lowered)',
+    () => {
+      const result = (() => {
+        const _user = getUser('1')
+        if (_user._tag === 'Left') return _user
+        const user = _user.value
+        if (!user.active) return __finish(left('Inactive' as const))
+        const _orders = getOrders(user.id)
+        if (_orders._tag === 'Left') return _orders
+        const orders = _orders.value
+        return __finish({ user, first: orders[0] })
+      })()
+      void result
+    },
+    BENCH_OPTS,
+  )
+
+  bench(
     'single yield, Left (short-circuit)',
     () => {
       either(function* (_raise) {
         const user = yield* getUser('not-found')
         return user
       })
+    },
+    BENCH_OPTS,
+  )
+
+  bench(
+    'single yield, Left (unplugin lowered)',
+    () => {
+      const result = (() => {
+        const _user = getUser('not-found')
+        if (_user._tag === 'Left') return _user
+        const user = _user.value
+        return __finish(user)
+      })()
+      void result
     },
     BENCH_OPTS,
   )
@@ -105,6 +137,24 @@ describe('either (async)', () => {
   )
 
   bench(
+    'two yields, success (unplugin lowered)',
+    async () => {
+      const result = await (async () => {
+        const _user = await fetchUser('1')
+        if (_user._tag === 'Left') return _user
+        const user = _user.value
+        const _orders = await fetchOrders()
+        if (_orders._tag === 'Left') return _orders
+        const orders = _orders.value
+        if (orders.length === 0) return __finish(left('NoOrders' as const))
+        return __finish({ user, orders })
+      })()
+      void result
+    },
+    BENCH_OPTS,
+  )
+
+  bench(
     'single yield, Left (short-circuit)',
     async () => {
       await either(async function* (_raise) {
@@ -130,6 +180,31 @@ describe('validate', () => {
   )
 
   bench(
+    'two checks, all pass (unplugin lowered)',
+    () => {
+      const result = (() => {
+        let _errors: unknown[] | undefined
+        const _age = validateAge(25)
+        if (_age._tag === 'Left') {
+          if (_errors === undefined) _errors = []
+          _errors.push(_age.error)
+        }
+        const age = _age._tag === 'Right' ? _age.value : undefined
+        const _name = validateName('Axel')
+        if (_name._tag === 'Left') {
+          if (_errors === undefined) _errors = []
+          _errors.push(_name.error)
+        }
+        const name = _name._tag === 'Right' ? _name.value : undefined
+        const _ret = { age, name }
+        return _errors === undefined ? right(_ret) : left(_errors)
+      })()
+      void result
+    },
+    BENCH_OPTS,
+  )
+
+  bench(
     'two checks, all fail (accumulate)',
     () => {
       validate(function* (check) {
@@ -137,6 +212,31 @@ describe('validate', () => {
         const name = yield* check(validateName(''))
         return { age, name }
       })
+    },
+    BENCH_OPTS,
+  )
+
+  bench(
+    'two checks, all fail (unplugin lowered)',
+    () => {
+      const result = (() => {
+        let _errors: unknown[] | undefined
+        const _age = validateAge(-5)
+        if (_age._tag === 'Left') {
+          if (_errors === undefined) _errors = []
+          _errors.push(_age.error)
+        }
+        const age = _age._tag === 'Right' ? _age.value : undefined
+        const _name = validateName('')
+        if (_name._tag === 'Left') {
+          if (_errors === undefined) _errors = []
+          _errors.push(_name.error)
+        }
+        const name = _name._tag === 'Right' ? _name.value : undefined
+        const _ret = { age, name }
+        return _errors === undefined ? right(_ret) : left(_errors)
+      })()
+      void result
     },
     BENCH_OPTS,
   )
@@ -154,6 +254,22 @@ describe('firstOf', () => {
   )
 
   bench(
+    'first attempt succeeds (unplugin lowered)',
+    () => {
+      const result = (() => {
+        let _errors: unknown[] | undefined
+        const _attempt = right('cached') as unknown as Either<unknown, unknown>
+        if (_attempt._tag === 'Right') return right(_attempt.value)
+        if (_errors === undefined) _errors = []
+        _errors.push(_attempt.error)
+        return _errors === undefined ? right(undefined) : left(_errors)
+      })()
+      void result
+    },
+    BENCH_OPTS,
+  )
+
+  bench(
     'first two fail, third succeeds',
     () => {
       firstOf(function* () {
@@ -166,6 +282,36 @@ describe('firstOf', () => {
   )
 
   bench(
+    'first two fail, third succeeds (unplugin lowered)',
+    () => {
+      const result = (() => {
+        let _errors: unknown[] | undefined
+        const _cache = left('CacheMiss' as const) as unknown as Either<
+          unknown,
+          unknown
+        >
+        if (_cache._tag === 'Right') return right(_cache.value)
+        if (_errors === undefined) _errors = []
+        _errors.push(_cache.error)
+        const _db = left('DbError' as const) as unknown as Either<
+          unknown,
+          unknown
+        >
+        if (_db._tag === 'Right') return right(_db.value)
+        if (_errors === undefined) _errors = []
+        _errors.push(_db.error)
+        const _api = right('from-api') as unknown as Either<unknown, unknown>
+        if (_api._tag === 'Right') return right(_api.value)
+        if (_errors === undefined) _errors = []
+        _errors.push(_api.error)
+        return _errors === undefined ? right(undefined) : left(_errors)
+      })()
+      void result
+    },
+    BENCH_OPTS,
+  )
+
+  bench(
     'all three fail',
     () => {
       firstOf(function* () {
@@ -173,6 +319,39 @@ describe('firstOf', () => {
         yield left('DbError' as const)
         yield left('ApiError' as const)
       })
+    },
+    BENCH_OPTS,
+  )
+
+  bench(
+    'all three fail (unplugin lowered)',
+    () => {
+      const result = (() => {
+        let _errors: unknown[] | undefined
+        const _cache = left('CacheMiss' as const) as unknown as Either<
+          unknown,
+          unknown
+        >
+        if (_cache._tag === 'Right') return right(_cache.value)
+        if (_errors === undefined) _errors = []
+        _errors.push(_cache.error)
+        const _db = left('DbError' as const) as unknown as Either<
+          unknown,
+          unknown
+        >
+        if (_db._tag === 'Right') return right(_db.value)
+        if (_errors === undefined) _errors = []
+        _errors.push(_db.error)
+        const _api = left('ApiError' as const) as unknown as Either<
+          unknown,
+          unknown
+        >
+        if (_api._tag === 'Right') return right(_api.value)
+        if (_errors === undefined) _errors = []
+        _errors.push(_api.error)
+        return _errors === undefined ? right(undefined) : left(_errors)
+      })()
+      void result
     },
     BENCH_OPTS,
   )
@@ -198,11 +377,45 @@ describe('collect', () => {
   )
 
   bench(
+    '10 mixed results (unplugin lowered)',
+    () => {
+      const result = (() => {
+        const errors = []
+        const values = []
+        for (const r of MIXED_10) {
+          if (r._tag === 'Left') errors.push(r.error)
+          else values.push(r.value)
+        }
+        return { errors, values }
+      })()
+      void result
+    },
+    BENCH_OPTS,
+  )
+
+  bench(
     '100 mixed results',
     () => {
       collect(function* () {
         for (const r of MIXED_100) yield r
       })
+    },
+    BENCH_OPTS,
+  )
+
+  bench(
+    '100 mixed results (unplugin lowered)',
+    () => {
+      const result = (() => {
+        const errors = []
+        const values = []
+        for (const r of MIXED_100) {
+          if (r._tag === 'Left') errors.push(r.error)
+          else values.push(r.value)
+        }
+        return { errors, values }
+      })()
+      void result
     },
     BENCH_OPTS,
   )

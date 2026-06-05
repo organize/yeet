@@ -1,6 +1,6 @@
 # yeet
 
-`yeet` is a tiny (2.23 kB gzipped), dependency-free `Either` library for TypeScript. It gives you
+`yeet` is a tiny (about 2.6 kB gzipped), dependency-free `Either` library for TypeScript. It gives you
 typed `Left` / `Right` values, generator-based do-notation, async support, and a
 few practical helpers for validation and fallback flows.
 
@@ -134,6 +134,42 @@ become `Left<Rejected>`.
 ```ts
 const config = yield * (await raise(() => JSON.parse(readConfigFile())))
 ```
+
+## Build-Time Optimizer
+
+Yeet also ships an optional unplugin optimizer. Your source stays the same; the
+plugin looks for inline generator calls to `either`, `validate`, `firstOf`, and
+`collect` that it can prove, then lowers them into plain early-return or
+accumulator JavaScript. If it cannot prove the shape, it leaves the original
+runtime call exactly where it found it. No spooky action at a distance, just a
+little stagehand moving furniture before the curtain rises.
+
+```ts
+// vite.config.ts
+import yeet from '@big-time/yeet/unplugin/vite'
+
+export default {
+  plugins: [yeet()],
+}
+```
+
+Adapter subpaths are available for Vite, Rollup, Webpack, Rspack, esbuild, and
+Bun: `@big-time/yeet/unplugin/vite`,
+`@big-time/yeet/unplugin/rollup`, `@big-time/yeet/unplugin/webpack`,
+`@big-time/yeet/unplugin/rspack`, `@big-time/yeet/unplugin/esbuild`, and
+`@big-time/yeet/unplugin/bun`.
+
+The optimizer is binding-scoped, so `import { either as e } from 'yeet'` works,
+while a shadowed local `either` is politely ignored. It lowers direct
+`yield* someEither()` steps in `either`, direct `yield* check(someEither())`
+steps in `validate`, and direct `yield someEither()` attempts in `firstOf` and
+`collect`.
+
+It only lowers inline generator literals, and it bails on the abortable
+overload, escaped `raise` / `check`, `this`, `arguments`, indirect yields, and
+expression positions where hoisting would change evaluation. The runtime
+library remains the interpreter underneath, as dependable as a man in a dark
+suit explaining how rain becomes a river.
 
 ## Cancellation
 

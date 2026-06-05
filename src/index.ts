@@ -44,6 +44,7 @@ export type {
   CollectAllResult,
 } from './combinators.ts'
 export {
+  __finish,
   either,
   capture,
   validate,

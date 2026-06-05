@@ -1,7 +1,16 @@
 import { defineConfig } from 'tsdown'
 
 export default defineConfig({
-  entry: ['src/index.ts'],
+  entry: [
+    'src/index.ts',
+    'src/unplugin.ts',
+    'src/unplugin/vite.ts',
+    'src/unplugin/rollup.ts',
+    'src/unplugin/webpack.ts',
+    'src/unplugin/rspack.ts',
+    'src/unplugin/esbuild.ts',
+    'src/unplugin/bun.ts',
+  ],
   format: ['esm'],
   clean: true,
   sourcemap: true,
@@ -16,8 +25,11 @@ export default defineConfig({
       'tsdown',
       'typescript',
     ],
+    dts: {
+      neverBundle: ['unplugin'],
+    },
   },
-  platform: 'neutral',
+  platform: 'node',
   target: 'es2025',
   fixedExtension: true,
 })

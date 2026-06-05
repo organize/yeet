@@ -28,6 +28,10 @@ function finishEither(ret: unknown): Either<any, any> {
     : right(ret)
 }
 
+export function __finish(ret: unknown): Either<any, any> {
+  return finishEither(ret)
+}
+
 function eitherSyncContinue<Eff extends Either<any, any>, Ret>(
   gen: Generator<Eff, Ret, unknown>,
   value: unknown,
