@@ -164,6 +164,32 @@ function asyncDisposable(
   }
 }
 
+function throwingAsyncDisposable(
+  name: string,
+  events: string[],
+  error: Error,
+): TrackedAsyncDisposable {
+  return {
+    name,
+    async [Symbol.asyncDispose]() {
+      events.push(`dispose ${name}`)
+      await Promise.resolve()
+      throw error
+    },
+  }
+}
+
+function expectSuppressedError(
+  thrown: unknown,
+  error: Error,
+  suppressed: Error,
+) {
+  expect(thrown).toBeInstanceOf(SuppressedError)
+  if (!(thrown instanceof SuppressedError)) return
+  expect(thrown.error).toBe(error)
+  expect(thrown.suppressed).toBe(suppressed)
+}
+
 async function abortAsLeft<const E>(
   signal: AbortSignal,
   error: E,
@@ -485,6 +511,29 @@ describe('either cleanup and thrown errors', () => {
       'dispose throw:end',
     ])
   })
+
+  it('preserves SuppressedError chains when multiple await using disposers throw after a plain Left', async () => {
+    const events: string[] = []
+    const outerError = new Error('outer dispose failed')
+    const innerError = new Error('inner dispose failed')
+
+    let thrown: unknown
+    try {
+      await either(async function* () {
+        await using outer = throwingAsyncDisposable('outer', events, outerError)
+        await using inner = throwingAsyncDisposable('inner', events, innerError)
+
+        events.push(outer.name)
+        events.push(inner.name)
+        yield* left('Stop' as const)
+      })
+    } catch (error) {
+      thrown = error
+    }
+
+    expectSuppressedError(thrown, outerError, innerError)
+    expect(events).toEqual(['outer', 'inner', 'dispose inner', 'dispose outer'])
+  })
 })
 
 describe('either cancellation', () => {
@@ -515,6 +564,26 @@ describe('either cancellation', () => {
     expect(events).toEqual([])
   })
 
+  it('uses the default AbortError DOMException when abort has no reason', async () => {
+    const controller = new AbortController()
+
+    const resultPromise = either(controller.signal, async function* () {
+      yield* await abortAsLeft(controller.signal, 'InnerAbort' as const)
+      return 'done' as const
+    })
+
+    await Promise.resolve()
+    controller.abort()
+    const result = await resultPromise
+
+    expect(result._tag).toBe('Left')
+    if (result._tag !== 'Left') return
+    const error = result.error as Aborted
+    expect(error._tag).toBe('Aborted')
+    expect(error.reason).toBeInstanceOf(DOMException)
+    expect((error.reason as DOMException).name).toBe('AbortError')
+  })
+
   it('closes and disposes when a cooperating operation observes abort', async () => {
     const controller = new AbortController()
     const events: string[] = []
@@ -533,6 +602,82 @@ describe('either cancellation', () => {
 
     expectLeft(result, { _tag: 'Aborted', reason: 'Stop' })
     expect(events).toEqual(['conn', 'dispose conn:start', 'dispose conn:end'])
+  })
+
+  it('disposes a resource acquired before the first yield when the signal aborts there', async () => {
+    const controller = new AbortController()
+    const events: string[] = []
+
+    const resultPromise = either(controller.signal, async function* () {
+      await using resource = asyncDisposable('pre-yield', events)
+      events.push(resource.name)
+      controller.abort('Stop')
+      yield* await abortAsLeft(controller.signal, 'InnerAbort' as const)
+      events.push('after abort')
+      return 'done' as const
+    })
+
+    const result = await resultPromise
+
+    expectLeft(result, { _tag: 'Aborted', reason: 'Stop' })
+    expect(events).toEqual([
+      'pre-yield',
+      'dispose pre-yield:start',
+      'dispose pre-yield:end',
+    ])
+  })
+
+  it('rejects when a disposer throws during abort unwind', async () => {
+    const controller = new AbortController()
+    const events: string[] = []
+    const disposeError = new Error('dispose failed')
+
+    const resultPromise = either(controller.signal, async function* () {
+      await using resource = throwingAsyncDisposable(
+        'conn',
+        events,
+        disposeError,
+      )
+      events.push(resource.name)
+      yield* await abortAsLeft(controller.signal, 'InnerAbort' as const)
+      return 'done' as const
+    })
+
+    await Promise.resolve()
+    controller.abort('Stop')
+
+    await expect(resultPromise).rejects.toBe(disposeError)
+    expect(events).toEqual(['conn', 'dispose conn'])
+  })
+
+  it('preserves SuppressedError chains when multiple await using disposers throw during abort unwind', async () => {
+    const controller = new AbortController()
+    const events: string[] = []
+    const outerError = new Error('outer dispose failed')
+    const innerError = new Error('inner dispose failed')
+
+    const resultPromise = either(controller.signal, async function* () {
+      await using outer = throwingAsyncDisposable('outer', events, outerError)
+      await using inner = throwingAsyncDisposable('inner', events, innerError)
+
+      events.push(outer.name)
+      events.push(inner.name)
+      yield* await abortAsLeft(controller.signal, 'InnerAbort' as const)
+      return 'done' as const
+    })
+
+    await Promise.resolve()
+    controller.abort('Stop')
+
+    let thrown: unknown
+    try {
+      await resultPromise
+    } catch (error) {
+      thrown = error
+    }
+
+    expectSuppressedError(thrown, outerError, innerError)
+    expect(events).toEqual(['outer', 'inner', 'dispose inner', 'dispose outer'])
   })
 
   it('waits to unwind when the in-flight operation ignores the signal', async () => {
