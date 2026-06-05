@@ -159,6 +159,10 @@ const result = await either(signal, async function* (raise) {
 type Aborted = { readonly _tag: 'Aborted'; readonly reason: unknown }
 ```
 
+That `reason` is honestly `unknown`. `controller.abort()` with no argument gives
+you the platform's default `AbortError` `DOMException`; `controller.abort(x)`
+gives you `x`. Yeet does not comb its hair into a library-shaped error for you.
+
 This is regular JavaScript cancellation, which means it is cooperative. The
 driver can stop advancing the generator and unwind resources, but it cannot
 interrupt synchronous CPU-bound work, and it cannot cancel an in-flight promise
@@ -169,8 +173,16 @@ hat.
 
 If the current awaited operation ignores the signal, yeet requests
 `gen.return()` immediately, but the returned promise cannot settle until the
-generator reaches a point where JavaScript can unwind it. No magic trapdoor in
-the floorboards. Just honest cleanup.
+generator reaches a point where JavaScript can unwind it. Responsiveness is
+bounded by the longest in-flight step. If that step ignores the signal and never
+settles, `either(signal, ...)` waits forever, patiently holding the lantern. The
+fix is to thread the same signal into the operation doing the work; the driver
+only guarantees "stop advancing and unwind."
+
+If cleanup itself throws during abort unwind, that thrown error wins. Multiple
+throwing `using` / `await using` disposers follow JavaScript's `SuppressedError`
+rules, so the earlier cleanup failure is still chained instead of vanishing
+under the floorboards.
 
 ## Concurrent All
 
