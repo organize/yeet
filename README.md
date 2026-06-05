@@ -1,6 +1,8 @@
 # yeet
 
-`yeet` is a tiny (about 2.6 kB gzipped), dependency-free `Either` library for TypeScript. It gives you
+> zero-dependencies. tree-shakeable & side-effect free - 2.6 kB gzipped
+
+`yeet` is a tiny, dependency-free `Either` library for TypeScript. It gives you
 typed `Left` / `Right` values, generator-based do-notation, async support, and a
 few practical helpers for validation and fallback flows.
 
