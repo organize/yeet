@@ -17,38 +17,38 @@
         "mode": "transient",
         "iterations": 200000,
         "before": {
-          "rss": 50331648,
+          "rss": 48398336,
           "heapTotal": 812032,
           "heapUsed": 175406,
-          "external": 103500,
+          "external": 103944,
           "arrayBuffers": 0
         },
         "after": {
-          "rss": 93011968,
-          "heapTotal": 38025216,
-          "heapUsed": 419100,
-          "external": 116796,
+          "rss": 93618176,
+          "heapTotal": 38435840,
+          "heapUsed": 430492,
+          "external": 118684,
           "arrayBuffers": 0
         },
         "delta": {
-          "rss": 42680320,
-          "heapTotal": 37213184,
-          "heapUsed": 243694,
-          "external": 13296,
+          "rss": 45219840,
+          "heapTotal": 37623808,
+          "heapUsed": 255086,
+          "external": 14740,
           "arrayBuffers": 0
         },
         "postGc": {
-          "rss": 93028352,
+          "rss": 93634560,
           "heapTotal": 844800,
-          "heapUsed": 419100,
-          "external": 106404,
+          "heapUsed": 430492,
+          "external": 107404,
           "arrayBuffers": 0
         },
         "postGcDelta": {
-          "rss": 42696704,
+          "rss": 45236224,
           "heapTotal": 32768,
-          "heapUsed": 243694,
-          "external": 2904,
+          "heapUsed": 255086,
+          "external": 3460,
           "arrayBuffers": 0
         },
         "checksum": 630000
@@ -62,21 +62,21 @@
           "rss": 54362112,
           "heapTotal": 844800,
           "heapUsed": 175406,
-          "external": 113537,
+          "external": 116030,
           "arrayBuffers": 0
         },
         "after": {
-          "rss": 114802688,
-          "heapTotal": 8774656,
-          "heapUsed": 7060465,
-          "external": 126633,
+          "rss": 117669888,
+          "heapTotal": 8791040,
+          "heapUsed": 7051750,
+          "external": 131198,
           "arrayBuffers": 0
         },
         "delta": {
-          "rss": 57442304,
-          "heapTotal": 7929856,
-          "heapUsed": 6885059,
-          "external": 6411,
+          "rss": 60129280,
+          "heapTotal": 7946240,
+          "heapUsed": 6876344,
+          "external": 9147,
           "arrayBuffers": 0
         },
         "checksum": 630051
@@ -93,38 +93,38 @@
         "mode": "transient",
         "iterations": 200000,
         "before": {
-          "rss": 52953088,
+          "rss": 52379648,
           "heapTotal": 828416,
           "heapUsed": 175406,
-          "external": 109234,
+          "external": 111338,
           "arrayBuffers": 0
         },
         "after": {
-          "rss": 107167744,
-          "heapTotal": 39314432,
-          "heapUsed": 428903,
-          "external": 124327,
+          "rss": 108560384,
+          "heapTotal": 39188480,
+          "heapUsed": 445087,
+          "external": 128943,
           "arrayBuffers": 0
         },
         "delta": {
-          "rss": 54214656,
-          "heapTotal": 38486016,
-          "heapUsed": 253497,
-          "external": 15093,
+          "rss": 56180736,
+          "heapTotal": 38360064,
+          "heapUsed": 269681,
+          "external": 17605,
           "arrayBuffers": 0
         },
         "postGc": {
-          "rss": 107233280,
-          "heapTotal": 862208,
-          "heapUsed": 428903,
-          "external": 116594,
+          "rss": 108593152,
+          "heapTotal": 844800,
+          "heapUsed": 445087,
+          "external": 117502,
           "arrayBuffers": 0
         },
         "postGcDelta": {
-          "rss": 54280192,
-          "heapTotal": 33792,
-          "heapUsed": 253497,
-          "external": 7360,
+          "rss": 56213504,
+          "heapTotal": 16384,
+          "heapUsed": 269681,
+          "external": 6164,
           "arrayBuffers": 0
         },
         "checksum": 1470000
@@ -135,24 +135,24 @@
         "mode": "retained",
         "iterations": 200000,
         "before": {
-          "rss": 55590912,
+          "rss": 55230464,
           "heapTotal": 861184,
           "heapUsed": 175406,
-          "external": 118831,
+          "external": 121292,
           "arrayBuffers": 0
         },
         "after": {
-          "rss": 117374976,
-          "heapTotal": 8382464,
-          "heapUsed": 7790020,
-          "external": 137715,
+          "rss": 120078336,
+          "heapTotal": 8333312,
+          "heapUsed": 7855585,
+          "external": 139204,
           "arrayBuffers": 0
         },
         "delta": {
-          "rss": 58966016,
-          "heapTotal": 7521280,
-          "heapUsed": 7614614,
-          "external": 11523,
+          "rss": 62619648,
+          "heapTotal": 7472128,
+          "heapUsed": 7680179,
+          "external": 11435,
           "arrayBuffers": 0
         },
         "checksum": 1470051
@@ -169,38 +169,38 @@
         "mode": "transient",
         "iterations": 200000,
         "before": {
-          "rss": 53067776,
+          "rss": 53559296,
           "heapTotal": 812032,
           "heapUsed": 175406,
-          "external": 116962,
+          "external": 119654,
           "arrayBuffers": 0
         },
         "after": {
-          "rss": 106479616,
-          "heapTotal": 38943744,
-          "heapUsed": 439482,
-          "external": 135370,
+          "rss": 107003904,
+          "heapTotal": 38991872,
+          "heapUsed": 451030,
+          "external": 138102,
           "arrayBuffers": 0
         },
         "delta": {
-          "rss": 53411840,
-          "heapTotal": 38131712,
-          "heapUsed": 264076,
-          "external": 18408,
+          "rss": 53444608,
+          "heapTotal": 38179840,
+          "heapUsed": 275624,
+          "external": 18448,
           "arrayBuffers": 0
         },
         "postGc": {
-          "rss": 106512384,
-          "heapTotal": 845824,
-          "heapUsed": 439482,
-          "external": 123602,
+          "rss": 107053056,
+          "heapTotal": 829440,
+          "heapUsed": 451030,
+          "external": 127298,
           "arrayBuffers": 0
         },
         "postGcDelta": {
-          "rss": 53444608,
-          "heapTotal": 33792,
-          "heapUsed": 264076,
-          "external": 6640,
+          "rss": 53493760,
+          "heapTotal": 17408,
+          "heapUsed": 275624,
+          "external": 7644,
           "arrayBuffers": 0
         },
         "checksum": 630000
@@ -211,24 +211,24 @@
         "mode": "retained",
         "iterations": 200000,
         "before": {
-          "rss": 56901632,
+          "rss": 56262656,
           "heapTotal": 844800,
           "heapUsed": 175406,
-          "external": 127111,
+          "external": 129835,
           "arrayBuffers": 0
         },
         "after": {
-          "rss": 129384448,
-          "heapTotal": 16933888,
-          "heapUsed": 11876971,
-          "external": 144723,
+          "rss": 123666432,
+          "heapTotal": 16246784,
+          "heapUsed": 14049407,
+          "external": 148419,
           "arrayBuffers": 0
         },
         "delta": {
-          "rss": 69500928,
-          "heapTotal": 16089088,
-          "heapUsed": 11701565,
-          "external": 10927,
+          "rss": 65208320,
+          "heapTotal": 15401984,
+          "heapUsed": 13874001,
+          "external": 11899,
           "arrayBuffers": 0
         },
         "checksum": 630051
@@ -245,38 +245,38 @@
         "mode": "transient",
         "iterations": 200000,
         "before": {
-          "rss": 57442304,
-          "heapTotal": 844800,
+          "rss": 57409536,
+          "heapTotal": 828416,
           "heapUsed": 175406,
-          "external": 118744,
+          "external": 121553,
           "arrayBuffers": 0
         },
         "after": {
-          "rss": 112246784,
-          "heapTotal": 40548352,
-          "heapUsed": 448369,
-          "external": 141409,
+          "rss": 101072896,
+          "heapTotal": 40237056,
+          "heapUsed": 459454,
+          "external": 141342,
           "arrayBuffers": 0
         },
         "delta": {
-          "rss": 54804480,
-          "heapTotal": 39703552,
-          "heapUsed": 272963,
-          "external": 22665,
+          "rss": 43663360,
+          "heapTotal": 39408640,
+          "heapUsed": 284048,
+          "external": 19789,
           "arrayBuffers": 0
         },
         "postGc": {
-          "rss": 112312320,
-          "heapTotal": 862208,
-          "heapUsed": 448369,
-          "external": 129328,
+          "rss": 101122048,
+          "heapTotal": 845824,
+          "heapUsed": 459454,
+          "external": 131977,
           "arrayBuffers": 0
         },
         "postGcDelta": {
-          "rss": 54870016,
+          "rss": 43712512,
           "heapTotal": 17408,
-          "heapUsed": 272963,
-          "external": 10584,
+          "heapUsed": 284048,
+          "external": 10424,
           "arrayBuffers": 0
         },
         "checksum": 1470000
@@ -287,24 +287,24 @@
         "mode": "retained",
         "iterations": 200000,
         "before": {
-          "rss": 59539456,
+          "rss": 60882944,
           "heapTotal": 861184,
           "heapUsed": 175406,
-          "external": 128937,
+          "external": 132955,
           "arrayBuffers": 0
         },
         "after": {
-          "rss": 127008768,
-          "heapTotal": 15853568,
-          "heapUsed": 13528942,
-          "external": 150449,
+          "rss": 127418368,
+          "heapTotal": 15689728,
+          "heapUsed": 13694955,
+          "external": 152758,
           "arrayBuffers": 0
         },
         "delta": {
-          "rss": 65142784,
-          "heapTotal": 14992384,
-          "heapUsed": 13353536,
-          "external": 15035,
+          "rss": 63799296,
+          "heapTotal": 14828544,
+          "heapUsed": 13519549,
+          "external": 12442,
           "arrayBuffers": 0
         },
         "checksum": 1470051
@@ -321,38 +321,38 @@
         "mode": "transient",
         "iterations": 200000,
         "before": {
-          "rss": 50905088,
-          "heapTotal": 812032,
+          "rss": 53641216,
+          "heapTotal": 811008,
           "heapUsed": 175406,
-          "external": 105487,
+          "external": 114512,
           "arrayBuffers": 0
         },
         "after": {
-          "rss": 92848128,
-          "heapTotal": 38061056,
-          "heapUsed": 422711,
-          "external": 118695,
+          "rss": 93798400,
+          "heapTotal": 38523904,
+          "heapUsed": 449184,
+          "external": 131584,
           "arrayBuffers": 0
         },
         "delta": {
-          "rss": 41943040,
-          "heapTotal": 37249024,
-          "heapUsed": 247305,
-          "external": 13208,
+          "rss": 40157184,
+          "heapTotal": 37712896,
+          "heapUsed": 273778,
+          "external": 17072,
           "arrayBuffers": 0
         },
         "postGc": {
-          "rss": 92864512,
+          "rss": 93814784,
           "heapTotal": 844800,
-          "heapUsed": 422711,
-          "external": 108622,
+          "heapUsed": 449184,
+          "external": 117191,
           "arrayBuffers": 0
         },
         "postGcDelta": {
-          "rss": 41959424,
-          "heapTotal": 32768,
-          "heapUsed": 247305,
-          "external": 3135,
+          "rss": 40173568,
+          "heapTotal": 33792,
+          "heapUsed": 273778,
+          "external": 2679,
           "arrayBuffers": 0
         },
         "checksum": 1050000
@@ -363,24 +363,24 @@
         "mode": "retained",
         "iterations": 200000,
         "before": {
-          "rss": 54509568,
-          "heapTotal": 844800,
+          "rss": 55492608,
+          "heapTotal": 843776,
           "heapUsed": 175406,
-          "external": 115524,
+          "external": 125433,
           "arrayBuffers": 0
         },
         "after": {
-          "rss": 115556352,
-          "heapTotal": 8758272,
-          "heapUsed": 7077728,
-          "external": 128995,
+          "rss": 113655808,
+          "heapTotal": 8856576,
+          "heapUsed": 7014009,
+          "external": 138344,
           "arrayBuffers": 0
         },
         "delta": {
-          "rss": 57163776,
-          "heapTotal": 7913472,
-          "heapUsed": 6902322,
-          "external": 6994,
+          "rss": 55230464,
+          "heapTotal": 8012800,
+          "heapUsed": 6838603,
+          "external": 6434,
           "arrayBuffers": 0
         },
         "checksum": 1050051
@@ -397,38 +397,38 @@
         "mode": "transient",
         "iterations": 200000,
         "before": {
-          "rss": 55263232,
+          "rss": 55574528,
           "heapTotal": 828416,
           "heapUsed": 175406,
-          "external": 114960,
+          "external": 115125,
           "arrayBuffers": 0
         },
         "after": {
-          "rss": 109445120,
-          "heapTotal": 40056832,
-          "heapUsed": 439929,
-          "external": 133449,
+          "rss": 110247936,
+          "heapTotal": 40059904,
+          "heapUsed": 451482,
+          "external": 134906,
           "arrayBuffers": 0
         },
         "delta": {
-          "rss": 54181888,
-          "heapTotal": 39228416,
-          "heapUsed": 264523,
-          "external": 18489,
+          "rss": 54673408,
+          "heapTotal": 39231488,
+          "heapUsed": 276076,
+          "external": 19781,
           "arrayBuffers": 0
         },
         "postGc": {
-          "rss": 109494272,
-          "heapTotal": 845824,
-          "heapUsed": 439929,
-          "external": 122304,
+          "rss": 110247936,
+          "heapTotal": 844800,
+          "heapUsed": 451482,
+          "external": 124645,
           "arrayBuffers": 0
         },
         "postGcDelta": {
-          "rss": 54231040,
-          "heapTotal": 17408,
-          "heapUsed": 264523,
-          "external": 7344,
+          "rss": 54673408,
+          "heapTotal": 16384,
+          "heapUsed": 276076,
+          "external": 9520,
           "arrayBuffers": 0
         },
         "checksum": 2310000
@@ -439,24 +439,24 @@
         "mode": "retained",
         "iterations": 200000,
         "before": {
-          "rss": 57442304,
+          "rss": 57901056,
           "heapTotal": 861184,
           "heapUsed": 175406,
-          "external": 124997,
+          "external": 126733,
           "arrayBuffers": 0
         },
         "after": {
-          "rss": 120668160,
-          "heapTotal": 7382016,
-          "heapUsed": 7630666,
-          "external": 142945,
+          "rss": 120012800,
+          "heapTotal": 7383040,
+          "heapUsed": 7637846,
+          "external": 145257,
           "arrayBuffers": 0
         },
         "delta": {
-          "rss": 61210624,
-          "heapTotal": 6520832,
-          "heapUsed": 7455260,
-          "external": 11471,
+          "rss": 60014592,
+          "heapTotal": 6521856,
+          "heapUsed": 7462440,
+          "external": 12047,
           "arrayBuffers": 0
         },
         "checksum": 2310051
@@ -473,38 +473,38 @@
         "mode": "transient",
         "iterations": 50000,
         "before": {
-          "rss": 44138496,
-          "heapTotal": 979968,
+          "rss": 44662784,
+          "heapTotal": 913408,
           "heapUsed": 175406,
-          "external": 155599,
+          "external": 157191,
           "arrayBuffers": 0
         },
         "after": {
-          "rss": 90603520,
-          "heapTotal": 35419136,
-          "heapUsed": 501171,
-          "external": 191363,
+          "rss": 92372992,
+          "heapTotal": 35305472,
+          "heapUsed": 519327,
+          "external": 198975,
           "arrayBuffers": 0
         },
         "delta": {
-          "rss": 46465024,
-          "heapTotal": 34439168,
-          "heapUsed": 325765,
-          "external": 35764,
+          "rss": 47710208,
+          "heapTotal": 34392064,
+          "heapUsed": 343921,
+          "external": 41784,
           "arrayBuffers": 0
         },
         "postGc": {
-          "rss": 90652672,
-          "heapTotal": 861184,
-          "heapUsed": 501171,
-          "external": 173015,
+          "rss": 92405760,
+          "heapTotal": 844800,
+          "heapUsed": 519327,
+          "external": 181363,
           "arrayBuffers": 0
         },
         "postGcDelta": {
-          "rss": 46514176,
-          "heapTotal": -118784,
-          "heapUsed": 325765,
-          "external": 17416,
+          "rss": 47742976,
+          "heapTotal": -68608,
+          "heapUsed": 343921,
+          "external": 24172,
           "arrayBuffers": 0
         },
         "checksum": 156000
@@ -515,24 +515,24 @@
         "mode": "retained",
         "iterations": 50000,
         "before": {
-          "rss": 46694400,
-          "heapTotal": 844800,
+          "rss": 47579136,
+          "heapTotal": 827392,
           "heapUsed": 175406,
-          "external": 159238,
+          "external": 163546,
           "arrayBuffers": 0
         },
         "after": {
-          "rss": 95174656,
-          "heapTotal": 7922688,
-          "heapUsed": 3819302,
-          "external": 188342,
+          "rss": 95059968,
+          "heapTotal": 7840768,
+          "heapUsed": 3810238,
+          "external": 196594,
           "arrayBuffers": 0
         },
         "delta": {
-          "rss": 45858816,
-          "heapTotal": 7213056,
-          "heapUsed": 3643896,
-          "external": 29071,
+          "rss": 44777472,
+          "heapTotal": 7099392,
+          "heapUsed": 3634832,
+          "external": 30235,
           "arrayBuffers": 0
         },
         "checksum": 156051
@@ -549,38 +549,38 @@
         "mode": "transient",
         "iterations": 50000,
         "before": {
-          "rss": 47235072,
-          "heapTotal": 861184,
+          "rss": 47529984,
+          "heapTotal": 843776,
           "heapUsed": 175406,
-          "external": 187028,
+          "external": 185493,
           "arrayBuffers": 0
         },
         "after": {
-          "rss": 93159424,
-          "heapTotal": 35727360,
-          "heapUsed": 561637,
-          "external": 238885,
+          "rss": 93962240,
+          "heapTotal": 35877888,
+          "heapUsed": 576010,
+          "external": 241994,
           "arrayBuffers": 0
         },
         "delta": {
-          "rss": 45924352,
-          "heapTotal": 34866176,
-          "heapUsed": 386231,
-          "external": 51857,
+          "rss": 46432256,
+          "heapTotal": 35034112,
+          "heapUsed": 400604,
+          "external": 56501,
           "arrayBuffers": 0
         },
         "postGc": {
-          "rss": 93224960,
-          "heapTotal": 893952,
-          "heapUsed": 561637,
-          "external": 200552,
+          "rss": 94011392,
+          "heapTotal": 877568,
+          "heapUsed": 576010,
+          "external": 204109,
           "arrayBuffers": 0
         },
         "postGcDelta": {
-          "rss": 45989888,
-          "heapTotal": 32768,
-          "heapUsed": 386231,
-          "external": 13524,
+          "rss": 46481408,
+          "heapTotal": 33792,
+          "heapUsed": 400604,
+          "external": 18616,
           "arrayBuffers": 0
         },
         "checksum": 364000
@@ -591,24 +591,24 @@
         "mode": "retained",
         "iterations": 50000,
         "before": {
-          "rss": 51494912,
-          "heapTotal": 877568,
+          "rss": 50348032,
+          "heapTotal": 843776,
           "heapUsed": 175406,
-          "external": 177439,
+          "external": 178663,
           "arrayBuffers": 0
         },
         "after": {
-          "rss": 101318656,
-          "heapTotal": 7480320,
-          "heapUsed": 3832236,
-          "external": 215671,
+          "rss": 101908480,
+          "heapTotal": 7447552,
+          "heapUsed": 3840852,
+          "external": 216895,
           "arrayBuffers": 0
         },
         "delta": {
-          "rss": 46104576,
-          "heapTotal": 6586368,
-          "heapUsed": 3656830,
-          "external": 51379,
+          "rss": 48709632,
+          "heapTotal": 6603776,
+          "heapUsed": 3665446,
+          "external": 52655,
           "arrayBuffers": 0
         },
         "checksum": 364051
@@ -625,38 +625,38 @@
         "mode": "transient",
         "iterations": 50000,
         "before": {
-          "rss": 41975808,
-          "heapTotal": 844800,
+          "rss": 43941888,
+          "heapTotal": 944128,
           "heapUsed": 175406,
-          "external": 130666,
+          "external": 157391,
           "arrayBuffers": 0
         },
         "after": {
-          "rss": 86327296,
-          "heapTotal": 35196928,
-          "heapUsed": 472654,
-          "external": 162030,
+          "rss": 92356608,
+          "heapTotal": 35510272,
+          "heapUsed": 536167,
+          "external": 208247,
           "arrayBuffers": 0
         },
         "delta": {
-          "rss": 44351488,
-          "heapTotal": 34352128,
-          "heapUsed": 297248,
-          "external": 31364,
+          "rss": 48414720,
+          "heapTotal": 34566144,
+          "heapUsed": 360761,
+          "external": 50856,
           "arrayBuffers": 0
         },
         "postGc": {
-          "rss": 86360064,
-          "heapTotal": 860160,
-          "heapUsed": 472654,
-          "external": 145201,
+          "rss": 92422144,
+          "heapTotal": 960512,
+          "heapUsed": 536167,
+          "external": 185262,
           "arrayBuffers": 0
         },
         "postGcDelta": {
-          "rss": 44384256,
-          "heapTotal": 15360,
-          "heapUsed": 297248,
-          "external": 14535,
+          "rss": 48480256,
+          "heapTotal": 16384,
+          "heapUsed": 360761,
+          "external": 27871,
           "arrayBuffers": 0
         },
         "checksum": 260000
@@ -667,24 +667,24 @@
         "mode": "retained",
         "iterations": 50000,
         "before": {
-          "rss": 44482560,
-          "heapTotal": 844800,
+          "rss": 46710784,
+          "heapTotal": 827392,
           "heapUsed": 175406,
-          "external": 138017,
+          "external": 158798,
           "arrayBuffers": 0
         },
         "after": {
-          "rss": 89538560,
-          "heapTotal": 5808128,
-          "heapUsed": 2850437,
-          "external": 164380,
+          "rss": 94945280,
+          "heapTotal": 6775808,
+          "heapUsed": 2507746,
+          "external": 200493,
           "arrayBuffers": 0
         },
         "delta": {
-          "rss": 42467328,
-          "heapTotal": 4963328,
-          "heapUsed": 2675031,
-          "external": 22554,
+          "rss": 45547520,
+          "heapTotal": 6065152,
+          "heapUsed": 2332340,
+          "external": 43830,
           "arrayBuffers": 0
         },
         "checksum": 260051
@@ -701,38 +701,38 @@
         "mode": "transient",
         "iterations": 50000,
         "before": {
-          "rss": 44875776,
-          "heapTotal": 994304,
+          "rss": 45514752,
+          "heapTotal": 993280,
           "heapUsed": 175406,
-          "external": 186698,
+          "external": 188434,
           "arrayBuffers": 0
         },
         "after": {
-          "rss": 96468992,
-          "heapTotal": 35842048,
-          "heapUsed": 564467,
-          "external": 241587,
+          "rss": 94978048,
+          "heapTotal": 35825664,
+          "heapUsed": 574947,
+          "external": 239747,
           "arrayBuffers": 0
         },
         "delta": {
-          "rss": 51593216,
-          "heapTotal": 34847744,
-          "heapUsed": 389061,
-          "external": 54889,
+          "rss": 49463296,
+          "heapTotal": 34832384,
+          "heapUsed": 399541,
+          "external": 51313,
           "arrayBuffers": 0
         },
         "postGc": {
-          "rss": 96518144,
-          "heapTotal": 1011712,
-          "heapUsed": 564467,
-          "external": 197770,
+          "rss": 95010816,
+          "heapTotal": 995328,
+          "heapUsed": 574947,
+          "external": 195898,
           "arrayBuffers": 0
         },
         "postGcDelta": {
-          "rss": 51642368,
-          "heapTotal": 17408,
-          "heapUsed": 389061,
-          "external": 11072,
+          "rss": 49496064,
+          "heapTotal": 2048,
+          "heapUsed": 399541,
+          "external": 7464,
           "arrayBuffers": 0
         },
         "checksum": 572000
@@ -743,24 +743,24 @@
         "mode": "retained",
         "iterations": 50000,
         "before": {
-          "rss": 47431680,
-          "heapTotal": 877568,
+          "rss": 47464448,
+          "heapTotal": 860160,
           "heapUsed": 175406,
-          "external": 175479,
+          "external": 176879,
           "arrayBuffers": 0
         },
         "after": {
-          "rss": 97484800,
-          "heapTotal": 6761472,
-          "heapUsed": 2822844,
-          "external": 209647,
+          "rss": 98582528,
+          "heapTotal": 6714368,
+          "heapUsed": 2839776,
+          "external": 214671,
           "arrayBuffers": 0
         },
         "delta": {
-          "rss": 47464448,
-          "heapTotal": 6000640,
-          "heapUsed": 2647438,
-          "external": 48929,
+          "rss": 48775168,
+          "heapTotal": 5987328,
+          "heapUsed": 2664370,
+          "external": 52729,
           "arrayBuffers": 0
         },
         "checksum": 572051

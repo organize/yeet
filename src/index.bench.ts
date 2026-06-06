@@ -1,422 +1,406 @@
-import { bench, describe } from 'vitest'
+import { afterAll, bench, describe } from 'vitest'
 
 import { BENCH_OPTS } from './bench-options.ts'
-import { __finish, either, validate, firstOf, collect } from './combinators.ts'
-import { left, right, type Either } from './either.ts'
+import yeet from './unplugin.ts'
 
-type User = { id: string; name: string; active: boolean }
-type Order = { id: string; userId: string }
+const YEET_SOURCE = new URL('./index.ts', import.meta.url).href
+const FIXTURE_ID = 'src/index.bench.fixture.js'
+const BENCH_BATCH = readPositiveInt('BENCH_BATCH', 64)
 
-const USER: User = { id: '1', name: 'Axel', active: true }
-const ORDERS: Order[] = [{ id: 'order-1', userId: '1' }]
+type BenchModule = {
+  baselineException: (index: number) => unknown
+  eitherSingleYieldSuccess: (index: number) => unknown
+  eitherTwoYieldsSuccess: (index: number) => unknown
+  eitherSingleYieldLeft: (index: number) => unknown
+  eitherYieldRaise: (index: number) => unknown
+  eitherAsyncTwoYieldsSuccess: (index: number) => Promise<unknown>
+  eitherAsyncSingleYieldLeft: (index: number) => Promise<unknown>
+  validateAllPass: (index: number) => unknown
+  validateAllFail: (index: number) => unknown
+  firstOfFirstSucceeds: (index: number) => unknown
+  firstOfThirdSucceeds: (index: number) => unknown
+  firstOfAllFail: (index: number) => unknown
+  collect10: (index: number) => unknown
+  collect100: (index: number) => unknown
+}
 
-const getUser = (id: string): Either<'UserNotFound', User> =>
-  id === '1' ? right(USER) : left('UserNotFound')
+type RawPlugin = {
+  readonly transform?: {
+    readonly handler?: (
+      code: string,
+      id: string,
+    ) =>
+      | string
+      | { readonly code: string }
+      | null
+      | Promise<
+          | string
+          | {
+              readonly code: string
+            }
+          | null
+        >
+  }
+}
 
-const getOrders = (_userId: string): Either<'DbError', Order[]> => right(ORDERS)
+const BENCH_SOURCE = `
+  import {
+    either,
+    validate,
+    firstOf,
+    collect,
+    left,
+    right,
+  } from ${JSON.stringify(YEET_SOURCE)}
 
-const validateAge = (n: number): Either<'TooYoung' | 'TooOld', number> =>
-  n < 0 ? left('TooYoung') : n > 150 ? left('TooOld') : right(n)
+  const USERS = {
+    "1": { id: "1", name: "Axel", active: true },
+    "2": { id: "2", name: "Bea", active: true },
+  }
+  const HIT_IDS = ["1", "2"]
+  const MISS_IDS = ["missing-a", "missing-b"]
+  const ORDERS = {
+    "1": [{ id: "order-1", userId: "1" }],
+    "2": [{ id: "order-2", userId: "2" }],
+  }
+  const PASS_AGES = [25, 42]
+  const FAIL_AGES = [-1, 151]
+  const PASS_NAMES = ["Axel", "Bea"]
+  const FAIL_NAMES = ["", "x".repeat(101)]
+  const CACHE_ERRORS = ["CacheMissA", "CacheMissB"]
+  const DB_ERRORS = ["DbErrorA", "DbErrorB"]
+  const API_ERRORS = ["ApiErrorA", "ApiErrorB"]
+  const API_VALUES = ["from-api-a", "from-api-b"]
+  const MIXED_10_A = Array.from({ length: 10 }, (_, index) =>
+    index % 2 === 0 ? right(index) : left("err-a-" + index),
+  )
+  const MIXED_10_B = Array.from({ length: 10 }, (_, index) =>
+    index % 2 === 0 ? right(index + 10) : left("err-b-" + index),
+  )
+  const MIXED_100_A = Array.from({ length: 100 }, (_, index) =>
+    index % 2 === 0 ? right(index) : left("err-a-" + index),
+  )
+  const MIXED_100_B = Array.from({ length: 100 }, (_, index) =>
+    index % 2 === 0 ? right(index + 100) : left("err-b-" + index),
+  )
 
-const validateName = (s: string): Either<'Empty' | 'TooLong', string> =>
-  s.length === 0 ? left('Empty') : s.length > 100 ? left('TooLong') : right(s)
+  function bit(index) {
+    return index & 1
+  }
+
+  function getUser(id) {
+    const user = USERS[id]
+    return user === undefined ? left("UserNotFound") : right(user)
+  }
+
+  function getOrders(userId) {
+    return right(ORDERS[userId])
+  }
+
+  function validateAge(age) {
+    return age < 0 ? left("TooYoung") : age > 150 ? left("TooOld") : right(age)
+  }
+
+  function validateName(name) {
+    return name.length === 0
+      ? left("Empty")
+      : name.length > 100
+        ? left("TooLong")
+        : right(name)
+  }
+
+  async function fetchUser(id) {
+    return getUser(id)
+  }
+
+  async function fetchOrders(userId) {
+    return getOrders(userId)
+  }
+
+  export function baselineException(index) {
+    try {
+      const user = bit(index) === 0 ? null : undefined
+      if (user === null || user === undefined) throw new Error("UserNotFound")
+      return user
+    } catch (error) {
+      return error
+    }
+  }
+
+  export function eitherSingleYieldSuccess(index) {
+    return either(function* () {
+      const user = yield* getUser(HIT_IDS[bit(index)])
+      return user
+    })
+  }
+
+  export function eitherTwoYieldsSuccess(index) {
+    return either(function* (raise) {
+      const user = yield* getUser(HIT_IDS[bit(index)])
+      if (!user.active) return raise("Inactive")
+      const orders = yield* getOrders(user.id)
+      return { user, first: orders[0] }
+    })
+  }
+
+  export function eitherSingleYieldLeft(index) {
+    return either(function* () {
+      const user = yield* getUser(MISS_IDS[bit(index)])
+      return user
+    })
+  }
+
+  export function eitherYieldRaise(index) {
+    return either(function* (raise) {
+      return raise(bit(index) === 0 ? "BoomA" : "BoomB")
+    })
+  }
+
+  export async function eitherAsyncTwoYieldsSuccess(index) {
+    return either(async function* (raise) {
+      const user = yield* await fetchUser(HIT_IDS[bit(index)])
+      const orders = yield* await fetchOrders(user.id)
+      if (orders.length === 0) return raise("NoOrders")
+      return { user, orders }
+    })
+  }
+
+  export async function eitherAsyncSingleYieldLeft(index) {
+    return either(async function* () {
+      const user = yield* await fetchUser(MISS_IDS[bit(index)])
+      return user
+    })
+  }
+
+  export function validateAllPass(index) {
+    return validate(function* (check) {
+      const age = yield* check(validateAge(PASS_AGES[bit(index)]))
+      const name = yield* check(validateName(PASS_NAMES[bit(index)]))
+      return { age, name }
+    })
+  }
+
+  export function validateAllFail(index) {
+    return validate(function* (check) {
+      const age = yield* check(validateAge(FAIL_AGES[bit(index)]))
+      const name = yield* check(validateName(FAIL_NAMES[bit(index)]))
+      return { age, name }
+    })
+  }
+
+  export function firstOfFirstSucceeds(index) {
+    return firstOf(function* () {
+      yield right("cached-" + bit(index))
+    })
+  }
+
+  export function firstOfThirdSucceeds(index) {
+    return firstOf(function* () {
+      yield left(CACHE_ERRORS[bit(index)])
+      yield left(DB_ERRORS[bit(index)])
+      yield right(API_VALUES[bit(index)])
+    })
+  }
+
+  export function firstOfAllFail(index) {
+    return firstOf(function* () {
+      yield left(CACHE_ERRORS[bit(index)])
+      yield left(DB_ERRORS[bit(index)])
+      yield left(API_ERRORS[bit(index)])
+    })
+  }
+
+  export function collect10(index) {
+    const items = bit(index) === 0 ? MIXED_10_A : MIXED_10_B
+    return collect(function* () {
+      for (const item of items) yield item
+    })
+  }
+
+  export function collect100(index) {
+    const items = bit(index) === 0 ? MIXED_100_A : MIXED_100_B
+    return collect(function* () {
+      for (const item of items) yield item
+    })
+  }
+`
+
+const runtime = await importBenchModule(BENCH_SOURCE)
+const optimized = await importBenchModule(
+  await transformWithPlugin(BENCH_SOURCE),
+)
+const benchSink = { value: undefined as unknown }
+
+afterAll(() => {
+  void benchSink.value
+})
+
+function moduleUrl(code: string): string {
+  return `data:text/javascript;base64,${Buffer.from(code).toString('base64')}`
+}
+
+async function importBenchModule(code: string): Promise<BenchModule> {
+  return (await import(moduleUrl(code))) as BenchModule
+}
+
+async function transformWithPlugin(code: string): Promise<string> {
+  const plugin = yeet.raw({ moduleNames: [YEET_SOURCE] }) as RawPlugin
+  const handler = plugin.transform?.handler
+  if (handler === undefined) {
+    throw new TypeError('yeet.raw() did not expose a transform handler')
+  }
+
+  const result = await handler(code, FIXTURE_ID)
+  if (result === null) {
+    throw new Error('yeet unplugin did not transform the benchmark fixture')
+  }
+
+  return typeof result === 'string' ? result : result.code
+}
+
+function consume(value: unknown): void {
+  benchSink.value = value
+}
+
+function readPositiveInt(name: string, fallback: number): number {
+  const value = Number(process.env[name] ?? fallback)
+  return Number.isFinite(value) && value > 0 ? Math.trunc(value) : fallback
+}
+
+function indexer(): () => number {
+  let index = 0
+  return () => index++
+}
+
+function consumeBatch(
+  module: BenchModule,
+  fn: keyof BenchModule,
+  next: () => number,
+): void {
+  let value: unknown
+  for (let batch = 0; batch < BENCH_BATCH; batch++) {
+    value = module[fn](next())
+  }
+  consume(value)
+}
+
+async function consumeAsyncBatch(
+  module: BenchModule,
+  fn: keyof BenchModule,
+  next: () => number,
+): Promise<void> {
+  let value: unknown
+  for (let batch = 0; batch < BENCH_BATCH; batch++) {
+    value = await module[fn](next())
+  }
+  consume(value)
+}
+
+function benchPair(
+  suite: string,
+  name: string,
+  fn: keyof BenchModule,
+  options: typeof BENCH_OPTS = BENCH_OPTS,
+): void {
+  describe(suite, () => {
+    const runtimeIndex = indexer()
+    bench(
+      name,
+      () => {
+        consumeBatch(runtime, fn, runtimeIndex)
+      },
+      options,
+    )
+
+    const optimizedIndex = indexer()
+    bench(
+      `${name} (unplugin transformed)`,
+      () => {
+        consumeBatch(optimized, fn, optimizedIndex)
+      },
+      options,
+    )
+  })
+}
+
+function benchAsyncPair(
+  suite: string,
+  name: string,
+  fn: keyof BenchModule,
+  options: typeof BENCH_OPTS = BENCH_OPTS,
+): void {
+  describe(suite, () => {
+    const runtimeIndex = indexer()
+    bench(
+      name,
+      async () => {
+        await consumeAsyncBatch(runtime, fn, runtimeIndex)
+      },
+      options,
+    )
+
+    const optimizedIndex = indexer()
+    bench(
+      `${name} (unplugin transformed)`,
+      async () => {
+        await consumeAsyncBatch(optimized, fn, optimizedIndex)
+      },
+      options,
+    )
+  })
+}
 
 describe('baseline (plain functions, no Either)', () => {
+  const next = indexer()
   bench(
     'early exit via exception',
     () => {
-      try {
-        const user = null
-        if (!user) throw new Error('UserNotFound')
-        void user
-      } catch {
-        // expected
+      let value: unknown
+      for (let batch = 0; batch < BENCH_BATCH; batch++) {
+        value = runtime.baselineException(next())
       }
+      consume(value)
     },
     BENCH_OPTS,
   )
 })
+
+benchPair('either (sync)', 'single yield, success', 'eitherSingleYieldSuccess')
+benchPair('either (sync)', 'two yields, success', 'eitherTwoYieldsSuccess')
+benchPair('either (sync)', 'single yield, Left', 'eitherSingleYieldLeft')
 
 describe('either (sync)', () => {
+  const next = indexer()
   bench(
-    'single yield, success',
+    'return raise()',
     () => {
-      either(function* (_raise) {
-        const user = yield* getUser('1')
-        return user
-      })
-    },
-    BENCH_OPTS,
-  )
-
-  bench(
-    'two yields, success',
-    () => {
-      either(function* (raise) {
-        const user = yield* getUser('1')
-        if (!user.active) return raise('Inactive' as const)
-        const orders = yield* getOrders(user.id)
-        return { user, first: orders[0] }
-      })
-    },
-    BENCH_OPTS,
-  )
-
-  bench(
-    'two yields, success (unplugin lowered)',
-    () => {
-      const result = (() => {
-        const _user = getUser('1')
-        if (_user._tag === 'Left') return _user
-        const user = _user.value
-        if (!user.active) return __finish(left('Inactive' as const))
-        const _orders = getOrders(user.id)
-        if (_orders._tag === 'Left') return _orders
-        const orders = _orders.value
-        return __finish({ user, first: orders[0] })
-      })()
-      void result
-    },
-    BENCH_OPTS,
-  )
-
-  bench(
-    'single yield, Left (short-circuit)',
-    () => {
-      either(function* (_raise) {
-        const user = yield* getUser('not-found')
-        return user
-      })
-    },
-    BENCH_OPTS,
-  )
-
-  bench(
-    'single yield, Left (unplugin lowered)',
-    () => {
-      const result = (() => {
-        const _user = getUser('not-found')
-        if (_user._tag === 'Left') return _user
-        const user = _user.value
-        return __finish(user)
-      })()
-      void result
-    },
-    BENCH_OPTS,
-  )
-
-  bench(
-    'yield* raise()',
-    () => {
-      either(function* (raise) {
-        yield* raise('Boom' as const)
-      })
+      let value: unknown
+      for (let batch = 0; batch < BENCH_BATCH; batch++) {
+        value = runtime.eitherYieldRaise(next())
+      }
+      consume(value)
     },
     BENCH_OPTS,
   )
 })
 
-const fetchUser = async (id: string): Promise<Either<'NotFound', User>> =>
-  Promise.resolve(id === '1' ? right(USER) : left('NotFound' as const))
-
-const fetchOrders = async (): Promise<Either<'DbError', Order[]>> =>
-  Promise.resolve(right(ORDERS))
-
-describe('either (async)', () => {
-  bench(
-    'two yields, success',
-    async () => {
-      await either(async function* (raise) {
-        const user = yield* await fetchUser('1')
-        const orders = yield* await fetchOrders()
-        if (orders.length === 0) return raise('NoOrders' as const)
-        return { user, orders }
-      })
-    },
-    BENCH_OPTS,
-  )
-
-  bench(
-    'two yields, success (unplugin lowered)',
-    async () => {
-      const result = await (async () => {
-        const _user = await fetchUser('1')
-        if (_user._tag === 'Left') return _user
-        const user = _user.value
-        const _orders = await fetchOrders()
-        if (_orders._tag === 'Left') return _orders
-        const orders = _orders.value
-        if (orders.length === 0) return __finish(left('NoOrders' as const))
-        return __finish({ user, orders })
-      })()
-      void result
-    },
-    BENCH_OPTS,
-  )
-
-  bench(
-    'single yield, Left (short-circuit)',
-    async () => {
-      await either(async function* (_raise) {
-        const user = yield* await fetchUser('not-found')
-        return user
-      })
-    },
-    BENCH_OPTS,
-  )
-})
-
-describe('validate', () => {
-  bench(
-    'two checks, all pass',
-    () => {
-      validate(function* (check) {
-        const age = yield* check(validateAge(25))
-        const name = yield* check(validateName('Axel'))
-        return { age, name }
-      })
-    },
-    BENCH_OPTS,
-  )
-
-  bench(
-    'two checks, all pass (unplugin lowered)',
-    () => {
-      const result = (() => {
-        let _errors: unknown[] | undefined
-        const _age = validateAge(25)
-        if (_age._tag === 'Left') {
-          if (_errors === undefined) _errors = []
-          _errors.push(_age.error)
-        }
-        const age = _age._tag === 'Right' ? _age.value : undefined
-        const _name = validateName('Axel')
-        if (_name._tag === 'Left') {
-          if (_errors === undefined) _errors = []
-          _errors.push(_name.error)
-        }
-        const name = _name._tag === 'Right' ? _name.value : undefined
-        const _ret = { age, name }
-        return _errors === undefined ? right(_ret) : left(_errors)
-      })()
-      void result
-    },
-    BENCH_OPTS,
-  )
-
-  bench(
-    'two checks, all fail (accumulate)',
-    () => {
-      validate(function* (check) {
-        const age = yield* check(validateAge(-5))
-        const name = yield* check(validateName(''))
-        return { age, name }
-      })
-    },
-    BENCH_OPTS,
-  )
-
-  bench(
-    'two checks, all fail (unplugin lowered)',
-    () => {
-      const result = (() => {
-        let _errors: unknown[] | undefined
-        const _age = validateAge(-5)
-        if (_age._tag === 'Left') {
-          if (_errors === undefined) _errors = []
-          _errors.push(_age.error)
-        }
-        const age = _age._tag === 'Right' ? _age.value : undefined
-        const _name = validateName('')
-        if (_name._tag === 'Left') {
-          if (_errors === undefined) _errors = []
-          _errors.push(_name.error)
-        }
-        const name = _name._tag === 'Right' ? _name.value : undefined
-        const _ret = { age, name }
-        return _errors === undefined ? right(_ret) : left(_errors)
-      })()
-      void result
-    },
-    BENCH_OPTS,
-  )
-})
-
-describe('firstOf', () => {
-  bench(
-    'first attempt succeeds',
-    () => {
-      firstOf(function* () {
-        yield right('cached')
-      })
-    },
-    BENCH_OPTS,
-  )
-
-  bench(
-    'first attempt succeeds (unplugin lowered)',
-    () => {
-      const result = (() => {
-        let _errors: unknown[] | undefined
-        const _attempt = right('cached') as unknown as Either<unknown, unknown>
-        if (_attempt._tag === 'Right') return right(_attempt.value)
-        if (_errors === undefined) _errors = []
-        _errors.push(_attempt.error)
-        return _errors === undefined ? right(undefined) : left(_errors)
-      })()
-      void result
-    },
-    BENCH_OPTS,
-  )
-
-  bench(
-    'first two fail, third succeeds',
-    () => {
-      firstOf(function* () {
-        yield left('CacheMiss' as const)
-        yield left('DbError' as const)
-        yield right('from-api')
-      })
-    },
-    BENCH_OPTS,
-  )
-
-  bench(
-    'first two fail, third succeeds (unplugin lowered)',
-    () => {
-      const result = (() => {
-        let _errors: unknown[] | undefined
-        const _cache = left('CacheMiss' as const) as unknown as Either<
-          unknown,
-          unknown
-        >
-        if (_cache._tag === 'Right') return right(_cache.value)
-        if (_errors === undefined) _errors = []
-        _errors.push(_cache.error)
-        const _db = left('DbError' as const) as unknown as Either<
-          unknown,
-          unknown
-        >
-        if (_db._tag === 'Right') return right(_db.value)
-        if (_errors === undefined) _errors = []
-        _errors.push(_db.error)
-        const _api = right('from-api') as unknown as Either<unknown, unknown>
-        if (_api._tag === 'Right') return right(_api.value)
-        if (_errors === undefined) _errors = []
-        _errors.push(_api.error)
-        return _errors === undefined ? right(undefined) : left(_errors)
-      })()
-      void result
-    },
-    BENCH_OPTS,
-  )
-
-  bench(
-    'all three fail',
-    () => {
-      firstOf(function* () {
-        yield left('CacheMiss' as const)
-        yield left('DbError' as const)
-        yield left('ApiError' as const)
-      })
-    },
-    BENCH_OPTS,
-  )
-
-  bench(
-    'all three fail (unplugin lowered)',
-    () => {
-      const result = (() => {
-        let _errors: unknown[] | undefined
-        const _cache = left('CacheMiss' as const) as unknown as Either<
-          unknown,
-          unknown
-        >
-        if (_cache._tag === 'Right') return right(_cache.value)
-        if (_errors === undefined) _errors = []
-        _errors.push(_cache.error)
-        const _db = left('DbError' as const) as unknown as Either<
-          unknown,
-          unknown
-        >
-        if (_db._tag === 'Right') return right(_db.value)
-        if (_errors === undefined) _errors = []
-        _errors.push(_db.error)
-        const _api = left('ApiError' as const) as unknown as Either<
-          unknown,
-          unknown
-        >
-        if (_api._tag === 'Right') return right(_api.value)
-        if (_errors === undefined) _errors = []
-        _errors.push(_api.error)
-        return _errors === undefined ? right(undefined) : left(_errors)
-      })()
-      void result
-    },
-    BENCH_OPTS,
-  )
-})
-
-const MIXED_10 = Array.from({ length: 10 }, (_, i) =>
-  i % 2 === 0 ? right(i) : left(`err${i}` as const),
+benchAsyncPair(
+  'either (async)',
+  'two yields, success',
+  'eitherAsyncTwoYieldsSuccess',
+)
+benchAsyncPair(
+  'either (async)',
+  'single yield, Left',
+  'eitherAsyncSingleYieldLeft',
 )
 
-const MIXED_100 = Array.from({ length: 100 }, (_, i) =>
-  i % 2 === 0 ? right(i) : left(`err${i}` as const),
-)
+benchPair('validate', 'two checks, all pass', 'validateAllPass')
+benchPair('validate', 'two checks, all fail', 'validateAllFail')
 
-describe('collect', () => {
-  bench(
-    '10 mixed results',
-    () => {
-      collect(function* () {
-        for (const r of MIXED_10) yield r
-      })
-    },
-    BENCH_OPTS,
-  )
+benchPair('firstOf', 'first attempt succeeds', 'firstOfFirstSucceeds')
+benchPair('firstOf', 'first two fail, third succeeds', 'firstOfThirdSucceeds')
+benchPair('firstOf', 'all three fail', 'firstOfAllFail')
 
-  bench(
-    '10 mixed results (unplugin lowered)',
-    () => {
-      const result = (() => {
-        const errors = []
-        const values = []
-        for (const r of MIXED_10) {
-          if (r._tag === 'Left') errors.push(r.error)
-          else values.push(r.value)
-        }
-        return { errors, values }
-      })()
-      void result
-    },
-    BENCH_OPTS,
-  )
-
-  bench(
-    '100 mixed results',
-    () => {
-      collect(function* () {
-        for (const r of MIXED_100) yield r
-      })
-    },
-    BENCH_OPTS,
-  )
-
-  bench(
-    '100 mixed results (unplugin lowered)',
-    () => {
-      const result = (() => {
-        const errors = []
-        const values = []
-        for (const r of MIXED_100) {
-          if (r._tag === 'Left') errors.push(r.error)
-          else values.push(r.value)
-        }
-        return { errors, values }
-      })()
-      void result
-    },
-    BENCH_OPTS,
-  )
-})
+benchPair('collect', '10 mixed results', 'collect10')
+benchPair('collect', '100 mixed results', 'collect100')

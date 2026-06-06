@@ -9,21 +9,21 @@ RSS is coarse and may move in page-sized chunks; heapUsed is usually the most us
 
 Scenario                                     Impl            Batch heap/op       Batch RSS/op        Retained heap/op      Retained RSS/op
 -------------------------------------------  --------------  ------------------  ------------------  --------------------  ----------------
-either - single yield, success               yeet            1 B/op              213 B/op            34 B/op               287 B/op
-either - single yield, success               better-result   1 B/op              271 B/op            38 B/op               295 B/op
-either - two yields, success                 yeet            1 B/op              267 B/op            59 B/op               348 B/op
-either - two yields, success                 better-result   1 B/op              274 B/op            67 B/op               326 B/op
-either - single yield, short-circuit         yeet            1 B/op              210 B/op            35 B/op               286 B/op
-either - single yield, short-circuit         better-result   1 B/op              271 B/op            37 B/op               306 B/op
-either async - two yields, success           yeet            7 B/op              929 B/op            73 B/op               917 B/op
-either async - two yields, success           better-result   8 B/op              918 B/op            73 B/op               922 B/op
-either async - single yield, short-circuit   yeet            6 B/op              887 B/op            54 B/op               849 B/op
-either async - single yield, short-circuit   better-result   8 B/op              1.0 KiB/op          53 B/op               949 B/op
+either - single yield, success               yeet            1 B/op              226 B/op            34 B/op               301 B/op
+either - single yield, success               better-result   1 B/op              281 B/op            38 B/op               313 B/op
+either - two yields, success                 yeet            1 B/op              267 B/op            69 B/op               326 B/op
+either - two yields, success                 better-result   1 B/op              218 B/op            68 B/op               319 B/op
+either - single yield, short-circuit         yeet            1 B/op              201 B/op            34 B/op               276 B/op
+either - single yield, short-circuit         better-result   1 B/op              273 B/op            37 B/op               300 B/op
+either async - two yields, success           yeet            7 B/op              954 B/op            73 B/op               896 B/op
+either async - two yields, success           better-result   8 B/op              929 B/op            73 B/op               974 B/op
+either async - single yield, short-circuit   yeet            7 B/op              968 B/op            47 B/op               911 B/op
+either async - single yield, short-circuit   better-result   8 B/op              989 B/op            53 B/op               976 B/op
 
 ## Retained heap comparison
 
-- either - single yield, success: yeet 34 B/op, better-result 38 B/op (yeet 1.11x lower)
-- either - two yields, success: yeet 59 B/op, better-result 67 B/op (yeet 1.14x lower)
-- either - single yield, short-circuit: yeet 35 B/op, better-result 37 B/op (yeet 1.08x lower)
-- either async - two yields, success: yeet 73 B/op, better-result 73 B/op (yeet 1.00x lower)
-- either async - single yield, short-circuit: yeet 54 B/op, better-result 53 B/op (better-result 1.01x lower)
+- either - single yield, success: yeet 34 B/op, better-result 38 B/op (yeet 1.12x lower)
+- either - two yields, success: yeet 69 B/op, better-result 68 B/op (better-result 1.03x lower)
+- either - single yield, short-circuit: yeet 34 B/op, better-result 37 B/op (yeet 1.09x lower)
+- either async - two yields, success: yeet 73 B/op, better-result 73 B/op (yeet 1.01x lower)
+- either async - single yield, short-circuit: yeet 47 B/op, better-result 53 B/op (yeet 1.14x lower)
