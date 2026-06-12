@@ -1,6 +1,6 @@
 {
   "name": "@big-time/yeet",
-  "version": "0.1.40",
+  "version": "0.2.0",
   "description": "tiny, performant, dependency-free `Either` monad for TypeScript",
   "keywords": [
     "do-notation",
