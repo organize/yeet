@@ -1,6 +1,7 @@
 # yeet
 
-> Dependency-free. Tree-shakeable. Side-effect free. About 2.6 kB gzipped.
+> Dependency-free. Tree-shakeable. Side-effect free. About 2.0 kB gzipped for
+> the core, with stream helpers on a separate 2.7 kB subpath.
 
 `yeet` is a tiny `Either` library for TypeScript. It gives you typed
 `Left` / `Right` values, generator-based do-notation, async support,
@@ -19,6 +20,7 @@ Just ordinary JavaScript control flow, with TypeScript quietly keeping score.
 - [Synchronous Flows](#synchronous-flows)
 - [Async Flows](#async-flows)
 - [Cancellation](#cancellation)
+- [Streams And Bytes](#streams-and-bytes)
 - [Composition Helpers](#composition-helpers)
 - [Serialization And Schemas](#serialization-and-schemas)
 - [Build-Time Optimizer](#build-time-optimizer)
@@ -262,8 +264,12 @@ cooperatively cancellable:
 const result = await either(signal, async function* (raise) {
   using conn = yield* openConn()
 
-  const user = yield* await fetchUser(id, signal)
-  const avatar = yield* await raise(fetch(user.avatarUrl, { signal }))
+  const user = yield* await fetchUser(id, raise.signal)
+  const avatar = yield* await raise(
+    fetch(user.avatarUrl, {
+      signal: raise.signal,
+    }),
+  )
 
   return { user, avatar, conn }
 })
@@ -274,6 +280,10 @@ const result = await either(signal, async function* (raise) {
 //   { user: User; avatar: Response; conn: Conn }
 // >
 ```
+
+In abortable flows, the injected `raise` function also carries the signal as
+`raise.signal`. If you only need the signal, destructure the first parameter:
+`async function* ({ signal }) { ... }`.
 
 When the signal aborts, yeet returns `Left<Aborted>` and calls `gen.return()`,
 so `finally`, `using`, and `await using` cleanup get their turn.
@@ -302,6 +312,159 @@ If cleanup itself throws during abort unwind, that thrown error wins. Multiple
 throwing `using` / `await using` disposers follow JavaScript's `SuppressedError`
 rules, so the earlier cleanup failure is still chained instead of vanishing
 under the floorboards.
+
+## Streams And Bytes
+
+Stream helpers live on a separate subpath so the core stays tiny:
+
+```ts
+import { bytes, collectText, consume, ndjson, sse } from '@big-time/yeet/stream'
+```
+
+They are dependency-free and built for the sort of code that reads request
+bodies, AI SDK deltas, NDJSON tool streams, and server-sent events. The rule is
+simple: helpers that return one final value return `Promise<Either<...>>`;
+helpers that produce many values are async iterables of `Either`, so each item
+can be handled with the same old `yield*`.
+
+### Bounded Bodies
+
+Use `bytes`, `text`, and `json` when you want one bounded result:
+
+```ts
+import { either } from '@big-time/yeet'
+import { bytes } from '@big-time/yeet/stream'
+
+const result = await either(signal, async function* ({ signal }) {
+  const file = yield* await bytes(request, {
+    maxBytes: 25_000_000,
+    signal,
+  })
+
+  const doc = yield* await extractText(file)
+  return yield* await indexDocument(doc)
+})
+
+// inferred:
+// Promise<
+//   Either<
+//     Aborted | StreamError | ExtractTextError | IndexDocumentError,
+//     IndexedDocument
+//   >
+// >
+```
+
+`bytes` accepts `Request` / `Response` bodies, `Blob`, `ReadableStream`,
+`AsyncIterable`, `ArrayBuffer`, and `Uint8Array`-ish views. Direct byte inputs
+are returned without copying; multiple chunks are copied once at the end.
+
+### AI Text Deltas
+
+For token or text streams, `collectText` avoids allocating a `Right` for every
+successful chunk. It drains the stream, optionally tees each delta, and joins
+once:
+
+```ts
+import { either } from '@big-time/yeet'
+import { collectText } from '@big-time/yeet/stream'
+
+const result = await either(signal, async function* ({ signal }) {
+  const text = yield* await collectText(generation.textStream, {
+    tee: (delta) => writer.write(delta),
+    maxChars: 200_000,
+    signal,
+    error: providerError.promise,
+  })
+
+  return text
+})
+
+// inferred: Promise<Either<Aborted | StreamError, string>>
+```
+
+If you do not want a final string, use `consume(source, { each, signal })`.
+`each` may return a `Left` to stop early, and throws/rejections become
+`Left<StreamConsumerError>`.
+
+```ts
+const result = await consume(generation.textStream, {
+  signal,
+  each(delta) {
+    writer.write(delta)
+    meter.add(delta.length)
+  },
+})
+
+// inferred: Promise<Either<Aborted | StreamError, void>>
+```
+
+### Structured Streams
+
+For protocols where each item can fail independently, use the async iterable
+helpers. They allocate an `Either` per parsed item because that is what makes
+`yield* next` work. In exchange, the loop stays ordinary JavaScript:
+
+```ts
+import { either } from '@big-time/yeet'
+import { sse } from '@big-time/yeet/stream'
+
+const result = await either(signal, async function* (raise) {
+  const res = yield* await raise(fetch(url, { signal: raise.signal }))
+
+  for await (const next of sse(res.body, { signal: raise.signal })) {
+    const event = yield* next
+
+    if (event.event === 'error') {
+      return raise({ _tag: 'ProviderError' as const, data: event.data })
+    }
+
+    yield* await handleProviderEvent(event)
+  }
+
+  return 'done' as const
+})
+
+// inferred:
+// Promise<
+//   Either<
+//     Aborted | Rejected | StreamError | ProviderError | HandleProviderEventError,
+//     "done"
+//   >
+// >
+```
+
+NDJSON reads the same way:
+
+```ts
+import { either } from '@big-time/yeet'
+import { ndjson } from '@big-time/yeet/stream'
+
+const result = await either(signal, async function* ({ signal }) {
+  for await (const next of ndjson(toolResultStream, {
+    maxBytes: 1_000_000,
+    signal,
+  })) {
+    const event = yield* next
+    const valid = yield* validateToolEvent(event)
+    yield* await saveEvent(valid)
+  }
+
+  return 'ok' as const
+})
+
+// inferred:
+// Promise<
+//   Either<
+//     Aborted | StreamError | ValidateToolEventError | SaveEventError,
+//     "ok"
+//   >
+// >
+```
+
+Cancellation follows the same cooperative rule as `either(signal, ...)`: pass
+the signal to the driver and to the stream helper. If the source ignores the
+signal and never settles, yeet cannot summon a settlement from the deep. It can
+only stop advancing once JavaScript hands control back.
 
 ## Composition Helpers
 
@@ -850,6 +1013,22 @@ the keys to the old truck.
 | `serializedEitherSchema(options?)` | Standard Schema validator for serialized JSON         |
 | `eitherSchema(options?)`           | Standard Schema validator that hydrates to `Either`   |
 
+### Streams And Bytes
+
+Import these from `@big-time/yeet/stream`.
+
+| API                             | Description                                               |
+| ------------------------------- | --------------------------------------------------------- |
+| `bytes(source, options?)`       | Read a bounded byte source into `Uint8Array`              |
+| `text(source, options?)`        | Read and UTF-8 decode a byte source                       |
+| `json(source, options?)`        | Read, decode, and `JSON.parse` a byte source              |
+| `chunks(source, options?)`      | Yield byte chunks as `Either` values                      |
+| `consume(source, options)`      | Drain raw or `Either` streams without success allocations |
+| `collectText(source, options?)` | Drain text deltas and join once                           |
+| `lines(source, options?)`       | Yield UTF-8 lines as `Either` values                      |
+| `ndjson(source, options?)`      | Yield parsed NDJSON records as `Either` values            |
+| `sse(source, options?)`         | Yield server-sent events as `Either` values               |
+
 ### Lower-Level Machinery
 
 | API                              | Description                                     |
@@ -894,8 +1073,9 @@ These benchmarks are intentionally tiny and can be sensitive to runtime noise,
 JIT mood, and passing clouds. Treat them as directional, not holy scripture.
 
 The current benchmark suite compares common `either` flows against
-`better-result`, and includes sync, async, short-circuit, validation, first
-success, collection, and plugin-transformed scenarios.
+`better-result`, includes sync, async, short-circuit, validation, first success,
+collection, plugin-transformed scenarios, and stream helpers against vanilla
+async-iteration code.
 
 ## License
 

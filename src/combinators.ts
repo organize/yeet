@@ -1,5 +1,6 @@
 import {
   type Aborted,
+  type AbortRaise,
   type Raise,
   type Rejected,
   aborted,
@@ -26,10 +27,6 @@ function finishEither(ret: unknown): Either<any, any> {
     (ret as MaybeLeft)._tag === 'Left'
     ? (ret as unknown as Left<any>)
     : right(ret)
-}
-
-export function __finish(ret: unknown): Either<any, any> {
-  return finishEither(ret)
 }
 
 function eitherSyncContinue<Eff extends Either<any, any>, Ret>(
@@ -185,7 +182,7 @@ export function either<Eff extends Either<any, any>, Ret>(
 
 export function either<Eff extends Either<any, any>, Ret>(
   signal: AbortSignal,
-  fn: (raise: Raise) => AsyncGenerator<Eff, Ret>,
+  fn: (raise: AbortRaise, signal: AbortSignal) => AsyncGenerator<Eff, Ret>,
 ): Promise<
   Either<
     Aborted | InferE<Eff> | InferE<Extract<Ret, Left<any>>>,
@@ -199,10 +196,13 @@ export function either<Eff extends Either<any, any>, Ret>(
     | ((
         raise: Raise,
       ) => Generator<Eff, Ret, unknown> | AsyncGenerator<Eff, Ret, unknown>),
-  fn?: (raise: Raise) => AsyncGenerator<Eff, Ret, unknown>,
+  fn?: (
+    raise: AbortRaise,
+    signal: AbortSignal,
+  ) => AsyncGenerator<Eff, Ret, unknown>,
 ): Either<any, any> | Promise<Either<any, any>> {
   if (typeof signalOrFn !== 'function') {
-    const gen = fn?.(raise)
+    const gen = fn?.(raiseWithSignal(signalOrFn), signalOrFn)
     if (gen === undefined) {
       throw new TypeError('either(signal, fn) requires an async generator')
     }
@@ -225,6 +225,12 @@ export function either<Eff extends Either<any, any>, Ret>(
   }
 
   return finishEither(next.value)
+}
+
+function raiseWithSignal(signal: AbortSignal): AbortRaise {
+  // eslint-disable-next-line promise-function-async
+  const scopedRaise = ((x: unknown) => raise(x as never)) as Raise
+  return Object.assign(scopedRaise, { signal })
 }
 
 /**

@@ -117,14 +117,15 @@ describe('yeet unplugin transform', () => {
     expect(transformed?.optimized).toBe(1)
     expect(transformed?.code.replaceAll('@big-time/yeet', '<yeet>'))
       .toMatchInlineSnapshot(`
-      "import { __finish as _yeetFinish } from "<yeet>";
+      "import { right as _yeetRight } from "<yeet>";
       import { either as e, right } from '<yeet>';
       export const result = (() => {
         const _yeet = right(41);
         if (_yeet._tag === "Left") return _yeet;
         const value = _yeet.value;
-        return _yeetFinish(value + 1);
-        return _yeetFinish(undefined);
+        const _yeetReturn = value + 1;
+        return _yeetReturn !== null && typeof _yeetReturn === "object" && _yeetReturn._tag === "Left" ? _yeetReturn : _yeetRight(_yeetReturn);
+        return _yeetRight(undefined);
       })();"
     `)
   })

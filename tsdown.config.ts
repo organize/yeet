@@ -3,6 +3,7 @@ import { defineConfig } from 'tsdown'
 export default defineConfig({
   entry: [
     'src/index.ts',
+    'src/stream.ts',
     'src/unplugin.ts',
     'src/unplugin/vite.ts',
     'src/unplugin/rollup.ts',
@@ -29,7 +30,7 @@ export default defineConfig({
       neverBundle: ['unplugin'],
     },
   },
-  platform: 'node',
+  platform: 'neutral',
   target: 'es2025',
   fixedExtension: true,
 })

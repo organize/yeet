@@ -15,7 +15,7 @@ export type YeetTransformResult = {
 }
 
 type CombinatorName = 'either' | 'validate' | 'firstOf' | 'collect'
-type HelperKey = 'finish' | 'raise' | 'left' | 'right'
+type HelperKey = 'raise' | 'left' | 'right'
 
 type HelperIds = {
   readonly ids: Map<HelperKey, t.Identifier>
@@ -44,7 +44,6 @@ const COMBINATOR_NAMES = new Set<CombinatorName>([
   'collect',
 ])
 const HELPER_IMPORTS = {
-  finish: '__finish',
   raise: 'raise',
   left: 'left',
   right: 'right',
@@ -175,22 +174,19 @@ function lowerEitherCall(
   const programPath = callPath.scope.getProgramParent().path
   if (!programPath.isProgram()) return false
 
-  const helpers = ensureHelpers(
-    programPath,
-    source,
-    state,
-    raiseName === undefined ? ['finish'] : ['finish', 'raise'],
-  )
-  const finishHelper = getHelper(helpers, 'finish')
+  const helpers = ensureHelpers(programPath, source, state, ['right'])
+  const rightHelper = getHelper(helpers, 'right')
   const raiseHelper =
-    raiseName === undefined ? undefined : getHelper(helpers, 'raise')
+    raiseName === undefined
+      ? undefined
+      : getHelper(ensureHelpers(programPath, source, state, ['raise']), 'raise')
 
   if (raiseHelper !== undefined) {
     rewriteRaiseReferences(fnPath, raiseName, raiseHelper)
   }
   rewriteYieldExpressions(fnPath)
-  rewriteReturns(fnPath, finishHelper)
-  appendFallthroughReturn(fnPath, finishHelper)
+  rewriteEitherReturns(fnPath, rightHelper)
+  appendFallthroughReturn(fnPath, rightHelper)
 
   const body = fnPath.node.body
   const iife = t.callExpression(
@@ -945,9 +941,9 @@ function finishWithErrors(
   )
 }
 
-function rewriteReturns(
+function rewriteEitherReturns(
   fnPath: NodePath<t.FunctionExpression>,
-  finishHelper: t.Identifier,
+  rightHelper: t.Identifier,
 ): void {
   fnPath.traverse({
     Function(path: NodePath<t.Function>) {
@@ -961,9 +957,21 @@ function rewriteReturns(
         return
       }
 
-      path.node.argument = t.callExpression(t.cloneNode(finishHelper), [
-        path.node.argument ?? t.identifier('undefined'),
-      ])
+      const argument = path.node.argument
+      if (argument === null || argument === undefined) {
+        path.node.argument = t.callExpression(t.cloneNode(rightHelper), [
+          t.identifier('undefined'),
+        ])
+        return
+      }
+
+      const ret = path.scope.generateUidIdentifier('yeetReturn')
+      path.insertBefore(
+        t.variableDeclaration('const', [
+          t.variableDeclarator(t.cloneNode(ret), argument),
+        ]),
+      )
+      path.node.argument = finishEitherReturn(t.cloneNode(ret), rightHelper)
     },
   })
 }
@@ -1037,11 +1045,34 @@ function collectedObject(
 
 function appendFallthroughReturn(
   fnPath: NodePath<t.FunctionExpression>,
-  finishHelper: t.Identifier,
+  rightHelper: t.Identifier,
 ): void {
   fnPath.node.body.body.push(
     t.returnStatement(
-      t.callExpression(t.cloneNode(finishHelper), [t.identifier('undefined')]),
+      t.callExpression(t.cloneNode(rightHelper), [t.identifier('undefined')]),
     ),
+  )
+}
+
+function finishEitherReturn(
+  ret: t.Identifier,
+  rightHelper: t.Identifier,
+): t.ConditionalExpression {
+  return t.conditionalExpression(
+    t.logicalExpression(
+      '&&',
+      t.logicalExpression(
+        '&&',
+        t.binaryExpression('!==', t.cloneNode(ret), t.nullLiteral()),
+        t.binaryExpression(
+          '===',
+          t.unaryExpression('typeof', t.cloneNode(ret)),
+          t.stringLiteral('object'),
+        ),
+      ),
+      isTag(ret, 'Left'),
+    ),
+    t.cloneNode(ret),
+    t.callExpression(t.cloneNode(rightHelper), [t.cloneNode(ret)]),
   )
 }

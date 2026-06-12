@@ -39,6 +39,11 @@
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
     },
+    "./stream": {
+      "types": "./dist/stream.d.mts",
+      "import": "./dist/stream.mjs",
+      "default": "./dist/stream.mjs"
+    },
     "./unplugin": {
       "types": "./dist/unplugin.d.mts",
       "import": "./dist/unplugin.mjs",

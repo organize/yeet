@@ -15,7 +15,6 @@ export {
   right,
   isLeft,
   isRight,
-  isLeftReturn,
   fromJSON,
   isSerializedEither,
 } from './either.ts'
@@ -30,7 +29,7 @@ export { serializedEitherSchema, eitherSchema } from './schema.ts'
 export type { Step, Strategy } from './fold.ts'
 export { fold, foldAsync } from './fold.ts'
 
-export type { Aborted, Rejected, Raise } from './async.ts'
+export type { Aborted, AbortRaise, Rejected, Raise } from './async.ts'
 export { aborted, rejected, raise } from './async.ts'
 
 export type {
@@ -44,11 +43,9 @@ export type {
   CollectAllResult,
 } from './combinators.ts'
 export {
-  __finish,
   either,
   capture,
   validate,
-  check,
   firstOf,
   collect,
   all,

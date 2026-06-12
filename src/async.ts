@@ -89,3 +89,7 @@ export function raise(
 }
 
 export type Raise = typeof raise
+
+export type AbortRaise = Raise & {
+  readonly signal: AbortSignal
+}
