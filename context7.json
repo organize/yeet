@@ -1,0 +1,34 @@
+{
+  "$schema": "https://context7.com/schema/context7.json",
+  "projectTitle": "yeet",
+  "description": "Tiny, zero-dependency Either/Result library for TypeScript using generator-based do-notation instead of method chaining, with an optional build-time transform that lowers the generators to plain branches.",
+  "branch": "main",
+  "folders": [],
+  "excludeFolders": ["src", "scripts", ".github"],
+  "excludeFiles": [
+    "bench-results.csv",
+    "memory-results.json",
+    "memory-results.txt",
+    "bun.lock",
+    "tsconfig.json",
+    "tsdown.config.ts",
+    "vitest.config.ts",
+    ".oxfmtrc.json",
+    ".oxlintrc.json"
+  ],
+  "rules": [
+    "The package name on npm is `@big-time/yeet`. Import from it directly; it is ESM-only with zero runtime dependencies.",
+    "yeet has NO method-chain API. Never generate `.map`, `.flatMap`, `.andThen`, `.mapErr`, `.orElse`, or `.pipe`. Compose computations with `either(function* () { ... })` and `yield*`.",
+    "Inside an `either` generator, `yield*` an Either to unwrap a `Right` to its value; a yielded `Left` short-circuits the enclosing runner and becomes its result.",
+    "For a typed early exit use `return raise(error)`. `raise` is the first parameter of the generator function passed to `either()`.",
+    "Do not annotate the error type. It is inferred from the Lefts you `yield*` and the values you `raise`. Use `as const` for narrow string-literal errors, e.g. `return raise('Inactive' as const)`.",
+    "Async: write `const x = yield* await fn()` where `fn` returns `Promise<Either<...>>`. Wrap raw promises or throwing initializers with `raise(promise)` or `raise(fn)` so rejections and synchronous throws become `Left<Rejected>` instead of escaping as exceptions.",
+    "To make an async run cancellable, pass an `AbortSignal` as the first argument: `either(signal, async function* () { ... })`. On abort the result is `Left<Aborted>`.",
+    "Choose the runner by intent: `either` stops on the first Left; `validate` runs every check and collects all errors as `Left<E[]>` using the injected `check` helper; `firstOf` returns the first `Right`; `collect`/`collectAll` partition into `{ values, errors }` without short-circuiting; `all` runs inputs (including promises and thunks) concurrently and returns the first Left by input order or a tuple of successes; `capture(either)` yields a Left as an ordinary value instead of short-circuiting.",
+    "Inspect a result with `isLeft(x)` / `isRight(x)` or by checking `x._tag === 'Left'`.",
+    "Use `ensure(cond, onFail)` and `ensureNotNull(value, onNull)` for inline guard checks; `yield*` them to short-circuit with a Left on failure.",
+    "Serialize with `toJSON()` / `JSON.stringify`. Rehydrate trusted serialized values with `fromJSON`. For untrusted JSON, validate with `eitherSchema` / `serializedEitherSchema`, passing any Standard Schema validator (Zod, Valibot, ArkType, TypeBox); yeet imports none of them and only checks for `~standard`.",
+    "Do not use `this` or `arguments` inside an `either` generator.",
+    "Optional performance step: the unplugin at `@big-time/yeet/unplugin` (`.vite`, `.webpack`, `.rollup`, `.esbuild`, `.rspack`, `.bun`) lowers `either`/`validate`/`firstOf`/`collect` generators to plain branches at build time. It is a pure optimization and changes no behavior; code runs correctly without it."
+  ]
+}

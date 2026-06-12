@@ -1,11 +1,17 @@
 {
   "name": "@big-time/yeet",
   "version": "0.1.40",
-  "description": "Tiny, performant, dependency-free `Either` monad for TypeScript",
+  "description": "tiny, performant, dependency-free `Either` monad for TypeScript",
   "keywords": [
+    "do-notation",
     "either",
+    "error-handling",
     "generator",
+    "monad",
     "performant",
+    "railway-oriented",
+    "result",
+    "result-type",
     "type-safe",
     "type-safe-errors"
   ],

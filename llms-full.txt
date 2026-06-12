@@ -1,0 +1,288 @@
+# yeet
+
+> A tiny (~2.23 kB gzipped), zero-dependency `Either` / `Result` library for TypeScript. It models success and failure as ordinary values (`Right<A>` and `Left<E>`) and uses generator-based do-notation instead of a method-chaining API. You write normal control flow — `if`, `for`, early `return` — and TypeScript infers the error union from what you yield and raise. An optional build-time transform lowers the generators to plain branches for zero runtime overhead.
+
+`yeet` deliberately has no `map` / `flatMap` / `andThen` / `pipe` surface. The happy path reads top-to-bottom; errors flow through the type system. Package name on npm is `@big-time/yeet`. It is ESM-only and ships TypeScript declarations.
+
+## Install
+
+```sh
+npm install @big-time/yeet
+# pnpm add @big-time/yeet
+# yarn add @big-time/yeet
+# bun add @big-time/yeet
+```
+
+```ts
+import { either, left, right, type Either } from '@big-time/yeet'
+```
+
+## Mental model
+
+An `Either<E, A>` is exactly one of:
+
+```ts
+left(error)   // Left<E>  — the failure branch
+right(value)  // Right<A> — the success branch
+```
+
+Inside an `either(...)` generator you unwrap a `Right` with `yield*`. If the value is a `Left`, the whole computation short-circuits and returns that `Left`. There is no unwrap-that-throws; failures stay as values.
+
+```ts
+const result = either(function* () {
+  const value = yield* right(42) // value is 42
+  yield* left('Nope')            // short-circuits here; returns Left<'Nope'>
+  return value
+}) // Either<'Nope', 42>
+```
+
+`return raise(error)` is the typed early-exit. `raise` is the first parameter of the generator function.
+
+```ts
+const result = either(function* (raise) {
+  const user = yield* getUser(id)               // Left short-circuits
+  if (!user.active) return raise('Inactive')    // typed early exit; narrows user.active below
+  return user
+}) // Either<'UserNotFound' | 'Inactive', User>
+```
+
+The error union is inferred from the `Left`s you `yield*` and the values you `raise`. Do not annotate the generator body.
+
+## Core API
+
+```ts
+left<E>(e: E): Left<E>
+right<A>(a: A): Right<A>
+isLeft<E, A>(v: Either<E, A>): v is Left<E>
+isRight<E, A>(v: Either<E, A>): v is Right<A>
+
+type Either<E, A> = Left<E> | Right<A>
+```
+
+`Left` and `Right` are small classes implementing `Symbol.iterator` (so they work with `yield*`), `toJSON`, and `Symbol.toPrimitive`. Tag checks (`value._tag === 'Left'`) work too.
+
+## either — run a generator, short-circuit on the first Left
+
+```ts
+either(fn: (raise: Raise) => Generator<Either<any, any>, Ret>): Either<E, A>
+either(fn: (raise: Raise) => AsyncGenerator<...>): Promise<Either<E, A>>
+either(signal: AbortSignal, fn: (raise) => AsyncGenerator<...>): Promise<Either<Aborted | E, A>>
+```
+
+Sync:
+
+```ts
+const checkout = either(function* (raise) {
+  const session = yield* getSession('session-1')
+  if (!session.checkoutEnabled) return raise('CheckoutDisabled')
+  const user = yield* getUser(session.userId)
+  const cart = yield* getCart(user.id)
+  return { user, cart }
+})
+```
+
+Async — await the `Either`, then `yield*` it:
+
+```ts
+const result = await either(async function* (raise) {
+  const user = yield* await fetchUser('1')
+  const orders = yield* await fetchOrders(user.id)
+  if (orders.length === 0) return raise('NoOrders')
+  return { user, orders }
+})
+```
+
+Promises/thenables and operations that can throw on start go through `raise`, turning rejections and throws into `Left<Rejected>` instead of escaping as exceptions:
+
+```ts
+const result = await either(async function* (raise) {
+  const response = yield* await raise(fetch('/api/user'))
+  if (!response.ok) return raise({ _tag: 'HttpError', status: response.status })
+  const data = yield* await raise(() => response.json() as Promise<unknown>)
+  return data
+})
+
+// raise(fn) uses Promise.try, so a synchronous throw also becomes Left<Rejected>:
+const config = yield* (await raise(() => JSON.parse(readConfigFile())))
+```
+
+Cancellation: pass an `AbortSignal` first. If it aborts mid-run, the result is `Left<Aborted>`.
+
+```ts
+const result = await either(signal, async function* () {
+  const a = yield* await step1()
+  const b = yield* await step2(a)
+  return b
+})
+```
+
+## capture — get a Left as a value instead of short-circuiting
+
+```ts
+capture<E, A>(e: Either<E, A>): Right<Either<E, A>>
+```
+
+```ts
+const result = either(function* (raise) {
+  const cached = yield* capture(getUserFromCache(id)) // does NOT short-circuit
+  if (cached._tag === 'Right') return cached.value
+  if (cached.error !== 'CacheMiss') return raise(cached.error)
+  return yield* getUserFromDatabase(id)
+})
+```
+
+## validate — accumulate ALL errors
+
+Use the injected `check` helper. Failures don't stop the run; every check executes. Returns `Left<E[]>` if any failed, else `Right<Ret>`. `check(...)` returns `undefined` inside the generator when its input was a `Left`.
+
+```ts
+validate(fn: (check: Check) => Generator<...>): Either<E[], Ret>
+```
+
+```ts
+const result = validate(function* (check) {
+  const age  = yield* check(validateAge(input.age))   // undefined if Left
+  const name = yield* check(validateName(input.name)) // still runs
+  return { age, name }
+})
+// Either<('TooYoung' | 'TooOld' | 'Empty' | 'TooLong')[], { age?: number; name?: string }>
+```
+
+## firstOf — first success wins
+
+Tries yielded `Either`s in order; returns the first `Right`. If all fail, returns `Left<E[]>` with every error.
+
+```ts
+const user = firstOf(function* () {
+  yield getUserFromCache(id)
+  yield getUserFromReplica(id)
+  yield getUserFromPrimary(id)
+}) // Either<Error[], User>
+```
+
+## collect — partition without short-circuiting
+
+```ts
+const { values, errors } = collect(function* () {
+  for (const item of items) yield processItem(item)
+})
+```
+
+## all / collectAll — run several together
+
+`all` accepts `Either`, `Promise<Either>`, or thunks returning either. Async inputs are observed concurrently. `all` returns the first `Left` by input order, or a tuple of all success values. `collectAll` never short-circuits and partitions into `{ values, errors }`.
+
+```ts
+const result = await either(async function* () {
+  const [user, settings] = yield* await all([fetchUser(id), fetchSettings(id)])
+  return { user, settings }
+})
+
+// tuple-typed:
+const r = await all([right(1), Promise.resolve(right('two')), () => right(true)])
+// Either<Rejected, [number, string, boolean]>
+
+// wrap raw promises with raise so rejections become data:
+const r2 = await either(async function* (raise) {
+  const [u, s] = yield* await all([raise(fetch('/api/user')), raise(fetch('/api/settings'))])
+  return { u, s }
+})
+
+const { values, errors } = await collectAll(ids.map((id) => () => fetchUser(id)))
+```
+
+## Guards
+
+```ts
+ensure<E>(cond: boolean, onFail: () => E): Either<E, void>
+ensureNotNull<A, E>(value: A | null | undefined, onNull: () => E): Either<E, A>
+```
+
+```ts
+const id = yield* ensureNotNull(input.userId, () => 'MissingUserId')
+yield* ensure(id.length > 0, () => 'EmptyUserId')
+```
+
+## raise
+
+```ts
+raise<E>(e: E): Left<E>                                        // typed early-exit value
+raise<T>(p: PromiseLike<T>): Promise<Either<Rejected, T>>      // rejection -> Left<Rejected>
+raise<T>(fn: () => T | PromiseLike<T>): Promise<Either<Rejected, Awaited<T>>> // throw/reject -> Left<Rejected>
+```
+
+## Serialization & schemas
+
+`Left`/`Right` serialize to tagged JSON. `toJSON()` eagerly converts nested values that provide their own `toJSON`, and turns native `Error`s into plain `{ name, message, ...fields }` (dropping `stack`).
+
+```ts
+JSON.stringify(left('Nope'))            // {"_tag":"Left","error":"Nope"}
+JSON.stringify(right({ id: 'user-1' })) // {"_tag":"Right","value":{"id":"user-1"}}
+
+fromJSON(parsed)            // rehydrate trusted serialized Either -> Left | Right
+isSerializedEither(value)  // detect the outer envelope only (does not validate payloads)
+```
+
+For untrusted JSON, pass Standard Schema-compatible validators (Zod, Valibot, ArkType, TypeBox, …). `yeet` imports none of them; it only looks for `~standard`.
+
+```ts
+import { eitherSchema, serializedEitherSchema } from '@big-time/yeet'
+
+const Serialized = serializedEitherSchema({ error: ApiError, value: User }) // -> transport shape
+const Hydrated   = eitherSchema({ error: ApiError, value: User })           // -> real Left | Right
+```
+
+Nested schemas are optional; without them the outer `{ _tag, error | value }` envelope is validated and the payload stays `unknown`.
+
+## Lower-level: fold / foldAsync
+
+Drive a generator yourself with a `Strategy`. Everything above is built on this. Most code never needs it.
+
+```ts
+type Strategy<Eff, Ret, Acc, R> = {
+  init: () => Acc
+  step: (eff: Eff, acc: Acc) => Step<Acc, R> // { done: true, result } | { done: false, send, acc }
+  finish: (ret: Ret, acc: Acc) => R
+}
+
+fold(fn: () => Generator<Eff, Ret>, strategy): R
+foldAsync(gen: AsyncGenerator<Eff, Ret>, strategy): Promise<R>
+```
+
+## Build-time transform (optional, recommended for hot paths)
+
+`yeet` ships an unplugin that lowers `either` / `validate` / `firstOf` / `collect` generators into plain branches at build time — `const x = yield* f()` becomes `const t = f(); if (t._tag === 'Left') return t; const x = t.value`. This removes generator allocation/resume/close overhead entirely. It is optional: code runs correctly without it; the transform only changes performance, not behavior.
+
+```ts
+// vite.config.ts
+import yeet from '@big-time/yeet/unplugin'
+export default { plugins: [yeet.vite({ /* moduleNames?: ['@big-time/yeet'] */ })] }
+```
+
+Bundler entrypoints: `yeet.vite`, `yeet.webpack`, `yeet.rollup`, `yeet.esbuild`, `yeet.rspack`, `yeet.bun` (also `yeet.raw` for the underlying transform).
+
+A call is lowered only when it is a direct `either(function* () { ... })` literal whose delegated `yield*`s sit in statement position. Lowering is skipped (the runtime generator is used instead) when the generator references `this` or `arguments`, lets `raise` escape, uses non-delegated `yield`, or is stored in a variable rather than passed inline. These cases still work — they just keep the (slower) generator runtime.
+
+## Idioms and pitfalls (for code generation)
+
+- There is NO method-chain API. Do not generate `.map`, `.flatMap`, `.andThen`, `.mapErr`, `.pipe`. Use `either(function* () { ... })` with `yield*`.
+- `yield* x` unwraps a `Right` to its value; a yielded `Left` short-circuits the enclosing runner.
+- Use `return raise(error)` for typed early exit. `raise` is the generator's first parameter. `raise('X')` alone (without `return`) just builds a `Left`; you usually `return` it.
+- Don't annotate the error type — it is inferred. Use `as const` on string-literal errors when you want a narrow literal type: `return raise('Inactive' as const)`.
+- Async: `const x = yield* await fetchThing()` where `fetchThing` returns `Promise<Either>`. Wrap raw promises and throwing starts with `raise(...)` so rejections/throws become `Left<Rejected>`.
+- Check results with `isLeft` / `isRight` or `result._tag === 'Left'`.
+- Choose the runner by intent: `either` (stop on first error), `validate` (collect all errors), `firstOf` (first success), `collect` / `collectAll` (partition), `all` (concurrent, first error or tuple), `capture` (treat a `Left` as a value).
+- Avoid `this` / `arguments` inside `either` generators (also disables the build-time transform).
+- ESM only; import from `@big-time/yeet`.
+
+## API index
+
+```
+left right isLeft isRight
+either capture validate firstOf collect all collectAll
+ensure ensureNotNull raise
+fromJSON isSerializedEither serializedEitherSchema eitherSchema
+fold foldAsync
+types: Either, Left, Right, Rejected, Aborted, Check, Raise, Strategy, Step,
+       SerializedEither, SerializedLeft, SerializedRight, Collected, InferE, InferA
+```
