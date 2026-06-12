@@ -1,0 +1,614 @@
+import { describe, expect, it } from 'vitest'
+
+import { either } from './combinators.ts'
+import { type Either, left, right } from './either.ts'
+import {
+  bytes,
+  chunks,
+  collectText,
+  consume,
+  json,
+  lines,
+  ndjson,
+  sse,
+  text,
+} from './stream.ts'
+
+const encoder = new TextEncoder()
+
+function encode(input: string): Uint8Array {
+  return encoder.encode(input)
+}
+
+async function* byteChunks(
+  parts: readonly string[],
+): AsyncGenerator<Uint8Array, void, unknown> {
+  for (const part of parts) yield encode(part)
+}
+
+async function* stringChunks(
+  parts: readonly string[],
+): AsyncGenerator<string, void, unknown> {
+  for (const part of parts) yield part
+}
+
+async function collectEither<E, A>(
+  source: AsyncIterable<Either<E, A>>,
+): Promise<Either<E, A>[]> {
+  const values: Either<E, A>[] = []
+  for await (const value of source) values.push(value)
+  return values
+}
+
+async function collectRights<E, A>(
+  source: AsyncIterable<Either<E, A>>,
+): Promise<A[]> {
+  const values: A[] = []
+  for await (const value of source) {
+    if (value._tag === 'Left') {
+      throw new Error(`Unexpected Left: ${String(value.error)}`)
+    }
+    values.push(value.value)
+  }
+  return values
+}
+
+function hasTag<T extends string>(
+  value: unknown,
+  tag: T,
+): value is { readonly _tag: T } & Record<string, unknown> {
+  return (
+    value !== null &&
+    typeof value === 'object' &&
+    (value as { readonly _tag?: unknown })._tag === tag
+  )
+}
+
+function expectRight<A>(result: Either<unknown, A>, value: A): void {
+  expect(result._tag).toBe('Right')
+  if (result._tag === 'Right') expect(result.value).toEqual(value)
+}
+
+function expectLeftTag(result: Either<unknown, unknown>, tag: string): void {
+  expect(result._tag).toBe('Left')
+  if (result._tag === 'Left') expect(hasTag(result.error, tag)).toBe(true)
+}
+
+describe('bytes', () => {
+  it('returns direct Uint8Array input without copying', async () => {
+    const input = new Uint8Array([1, 2, 3])
+
+    const result = await bytes(input)
+
+    expect(result._tag).toBe('Right')
+    if (result._tag === 'Right') expect(result.value).toBe(input)
+  })
+
+  it('respects already-aborted signals before reading immediate bytes', async () => {
+    const controller = new AbortController()
+    controller.abort('stop')
+
+    const result = await bytes(new Uint8Array([1, 2, 3]), {
+      signal: controller.signal,
+    })
+
+    expect(result._tag).toBe('Left')
+    if (result._tag === 'Left') {
+      expect(result.error).toEqual({ _tag: 'Aborted', reason: 'stop' })
+    }
+  })
+
+  it('respects ArrayBufferView offsets', async () => {
+    const input = new Uint8Array([0, 1, 2, 3]).subarray(1, 3)
+
+    const result = await bytes(input)
+
+    expect(result._tag).toBe('Right')
+    if (result._tag === 'Right') expect([...result.value]).toEqual([1, 2])
+  })
+
+  it('concatenates async iterable byte chunks', async () => {
+    const result = await bytes(byteChunks(['hel', 'lo']))
+
+    expect(result._tag).toBe('Right')
+    if (result._tag === 'Right') {
+      expect(new TextDecoder().decode(result.value)).toBe('hello')
+    }
+  })
+
+  it('enforces maxBytes and closes the source on overflow', async () => {
+    let closed = false
+
+    async function* source() {
+      try {
+        yield encode('hello')
+        yield encode('world')
+      } finally {
+        closed = true
+      }
+    }
+
+    const result = await bytes(source(), { maxBytes: 6 })
+
+    expectLeftTag(result, 'StreamTooLarge')
+    expect(closed).toBe(true)
+    if (result._tag === 'Left' && result.error._tag === 'StreamTooLarge') {
+      expect(result.error.bytesRead).toBe(10)
+    }
+  })
+
+  it('returns empty bytes for a response with no body', async () => {
+    const result = await bytes(new Response(null))
+
+    expect(result._tag).toBe('Right')
+    if (result._tag === 'Right') expect(result.value.byteLength).toBe(0)
+  })
+
+  it('reads request bodies', async () => {
+    const result = await bytes(
+      new Request('https://example.com/upload', {
+        method: 'POST',
+        body: 'hello',
+      }),
+    )
+
+    expect(result._tag).toBe('Right')
+    if (result._tag === 'Right') {
+      expect(new TextDecoder().decode(result.value)).toBe('hello')
+    }
+  })
+})
+
+describe('chunks', () => {
+  it('yields a single Right for direct bytes', async () => {
+    const result = await collectEither(chunks(encode('hello')))
+
+    expect(result).toHaveLength(1)
+    expect(result[0]?._tag).toBe('Right')
+  })
+
+  it('converts invalid chunks to Left<InvalidChunk>', async () => {
+    async function* source() {
+      yield 'not bytes'
+    }
+
+    const result = await collectEither(chunks(source()))
+
+    expect(result[0]?._tag).toBe('Left')
+    if (result[0]?._tag === 'Left')
+      expect(result[0].error._tag).toBe('InvalidChunk')
+  })
+
+  it('converts iterator throws to Left<StreamReadError>', async () => {
+    const error = new Error('read failed')
+
+    async function* source() {
+      yield encode('ok')
+      throw error
+    }
+
+    const result = await collectEither(chunks(source()))
+
+    expect(result[0]?._tag).toBe('Right')
+    expect(result[1]?._tag).toBe('Left')
+    if (result[1]?._tag === 'Left') {
+      expect(hasTag(result[1].error, 'StreamReadError')).toBe(true)
+      if (hasTag(result[1].error, 'StreamReadError')) {
+        expect(result[1].error.cause).toBe(error)
+      }
+    }
+  })
+
+  it('yields Left<Aborted> for an already-aborted signal', async () => {
+    const controller = new AbortController()
+    controller.abort('stop')
+
+    const result = await collectEither(
+      chunks(byteChunks(['never']), { signal: controller.signal }),
+    )
+
+    expect(result[0]?._tag).toBe('Left')
+    if (result[0]?._tag === 'Left') {
+      expect(result[0].error).toEqual({ _tag: 'Aborted', reason: 'stop' })
+    }
+  })
+
+  it('cancels a pending ReadableStream read on abort', async () => {
+    const controller = new AbortController()
+    let canceled = false
+
+    const stream = new ReadableStream<Uint8Array>({
+      cancel() {
+        canceled = true
+      },
+    })
+
+    const iterator = chunks(stream, { signal: controller.signal })[
+      Symbol.asyncIterator
+    ]()
+
+    const pending = iterator.next()
+    controller.abort('stop')
+
+    const result = await pending
+    await iterator.return?.()
+
+    expect(result.done).toBe(false)
+    if (!result.done) {
+      expect(result.value._tag).toBe('Left')
+      if (result.value._tag === 'Left') {
+        expect(result.value.error).toEqual({ _tag: 'Aborted', reason: 'stop' })
+      }
+    }
+    expect(canceled).toBe(true)
+  })
+})
+
+describe('consume', () => {
+  it('drains raw chunks without allocating Right per success', async () => {
+    const seen: string[] = []
+
+    const result = await consume(stringChunks(['a', 'b']), {
+      each(chunk) {
+        seen.push(chunk)
+      },
+    })
+
+    expectRight(result, undefined)
+    expect(seen).toEqual(['a', 'b'])
+  })
+
+  it('unwraps Either chunks and stops on the first Left', async () => {
+    let closed = false
+
+    async function* source() {
+      try {
+        yield right('ok')
+        yield left('bad' as const)
+        yield right('never')
+      } finally {
+        closed = true
+      }
+    }
+
+    const seen: string[] = []
+    const result = await consume(source(), {
+      each(chunk) {
+        seen.push(chunk)
+      },
+    })
+
+    expect(result._tag).toBe('Left')
+    if (result._tag === 'Left') expect(result.error).toBe('bad')
+    expect(seen).toEqual(['ok'])
+    expect(closed).toBe(true)
+  })
+
+  it('stops when the consumer returns a Left', async () => {
+    let closed = false
+
+    async function* source() {
+      try {
+        yield 'first'
+        yield 'second'
+      } finally {
+        closed = true
+      }
+    }
+
+    const result = await consume(source(), {
+      each() {
+        return left('Stop' as const)
+      },
+    })
+
+    expect(result._tag).toBe('Left')
+    if (result._tag === 'Left') expect(result.error).toBe('Stop')
+    expect(closed).toBe(true)
+  })
+
+  it('converts consumer throws to Left<StreamConsumerError>', async () => {
+    const error = new Error('boom')
+
+    const result = await consume(stringChunks(['a']), {
+      each() {
+        throw error
+      },
+    })
+
+    expectLeftTag(result, 'StreamConsumerError')
+    if (result._tag === 'Left' && hasTag(result.error, 'StreamConsumerError')) {
+      expect(result.error['cause']).toBe(error)
+    }
+  })
+
+  it('can be stopped by an external error promise', async () => {
+    let closed = false
+    const iterator: AsyncIterator<string> = {
+      next: async () => new Promise<IteratorResult<string>>(() => {}),
+      return: async () => {
+        closed = true
+        return { done: true, value: undefined }
+      },
+    }
+    const source: AsyncIterable<string> = {
+      [Symbol.asyncIterator]: () => iterator,
+    }
+
+    const result = await consume(source, {
+      error: Promise.resolve('outside'),
+      each() {},
+    })
+
+    expectLeftTag(result, 'StreamExternalError')
+    expect(closed).toBe(true)
+  })
+
+  it('does not pull from the source when the signal is already aborted', async () => {
+    const controller = new AbortController()
+    controller.abort('stop')
+    let pulled = false
+
+    const source: AsyncIterable<string> = {
+      [Symbol.asyncIterator]: () => ({
+        next: async () => {
+          pulled = true
+          return { done: true, value: undefined }
+        },
+      }),
+    }
+
+    const result = await consume(source, {
+      signal: controller.signal,
+      each() {},
+    })
+
+    expect(result._tag).toBe('Left')
+    if (result._tag === 'Left') {
+      expect(result.error).toEqual({ _tag: 'Aborted', reason: 'stop' })
+    }
+    expect(pulled).toBe(false)
+  })
+})
+
+describe('collectText', () => {
+  it('collects text chunks and tees each delta', async () => {
+    const deltas: string[] = []
+
+    const result = await collectText(stringChunks(['hel', 'lo']), {
+      tee(delta) {
+        deltas.push(delta)
+      },
+    })
+
+    expectRight(result, 'hello')
+    expect(deltas).toEqual(['hel', 'lo'])
+  })
+
+  it('enforces maxChars', async () => {
+    const result = await collectText(stringChunks(['hello', 'world']), {
+      maxChars: 6,
+    })
+
+    expectLeftTag(result, 'TextTooLarge')
+    if (result._tag === 'Left' && result.error._tag === 'TextTooLarge') {
+      expect(result.error.chars).toBe(10)
+    }
+  })
+})
+
+describe('decoding and parsing', () => {
+  it('decodes byte streams as text', async () => {
+    const result = await text(byteChunks(['hel', 'lo']))
+
+    expectRight(result, 'hello')
+  })
+
+  it('returns Left<DecodeError> for fatal utf-8 errors', async () => {
+    const result = text(new Uint8Array([0xff]), { fatal: true })
+
+    await expect(result).resolves.toMatchObject({
+      _tag: 'Left',
+      error: { _tag: 'DecodeError' },
+    })
+  })
+
+  it('parses json from bytes', async () => {
+    const result = await json(encode('{"ok":true}'))
+
+    expectRight(result, { ok: true })
+  })
+
+  it('returns Left<ParseError> for invalid json', async () => {
+    const result = json(encode('{nope'))
+
+    await expect(result).resolves.toMatchObject({
+      _tag: 'Left',
+      error: { _tag: 'ParseError' },
+    })
+  })
+})
+
+describe('lines and structured streams', () => {
+  it('splits utf-8 lines across chunks and strips CRLF', async () => {
+    const result = await collectRights(
+      lines(byteChunks(['hello\r\nwo', 'rld\nlast'])),
+    )
+
+    expect(result).toEqual(['hello', 'world', 'last'])
+  })
+
+  it('keeps decoder state for split multibyte characters', async () => {
+    const input = encode('a€\nb')
+
+    async function* source() {
+      yield input.subarray(0, 2)
+      yield input.subarray(2)
+    }
+
+    const result = await collectRights(lines(source()))
+
+    expect(result).toEqual(['a€', 'b'])
+  })
+
+  it('returns Left<DecodeError> for fatal line decoding errors', async () => {
+    const result = await collectEither(
+      lines(new Uint8Array([0xff]), { fatal: true }),
+    )
+
+    expect(result[0]?._tag).toBe('Left')
+    if (result[0]?._tag === 'Left')
+      expect(result[0].error._tag).toBe('DecodeError')
+  })
+
+  it('enforces maxLineBytes', async () => {
+    const result = await collectEither(
+      lines(byteChunks(['abcd']), {
+        maxLineBytes: 3,
+      }),
+    )
+
+    expect(result[0]?._tag).toBe('Left')
+    if (result[0]?._tag === 'Left')
+      expect(result[0].error._tag).toBe('LineTooLarge')
+  })
+
+  it('parses ndjson and skips empty lines', async () => {
+    const result = await collectRights(
+      ndjson(byteChunks(['{"a":1}\n\n{"b":2}\n'])),
+    )
+
+    expect(result).toEqual([{ a: 1 }, { b: 2 }])
+  })
+
+  it('returns Left<ParseError> for invalid ndjson', async () => {
+    const result = await collectEither(ndjson(byteChunks(['{"a":\n'])))
+
+    expect(result[0]?._tag).toBe('Left')
+    if (result[0]?._tag === 'Left')
+      expect(result[0].error._tag).toBe('ParseError')
+  })
+
+  it('parses server-sent events', async () => {
+    const result = await collectRights(
+      sse(
+        byteChunks([
+          ': comment\n',
+          'id: 42\n',
+          'event: update\n',
+          'retry: 1000\n',
+          'data: hello\n',
+          'data: world\n\n',
+          'data: final\n',
+        ]),
+      ),
+    )
+
+    expect(result).toEqual([
+      { event: 'update', data: 'hello\nworld', id: '42', retry: 1000 },
+      { event: 'message', data: 'final', id: '42' },
+    ])
+  })
+})
+
+describe('yeet-style stream flows', () => {
+  it('uses bytes inside an async either flow', async () => {
+    const result = await either(async function* () {
+      const body = yield* await text(byteChunks(['doc', ' body']), {
+        maxBytes: 25_000_000,
+      })
+      return body
+    })
+
+    expectRight(result, 'doc body')
+  })
+
+  it('uses sse with yield* next and a typed provider error', async () => {
+    const result = await either(async function* (raise) {
+      const handled: string[] = []
+
+      for await (const next of sse(
+        byteChunks([
+          'event: message\n',
+          'data: hello\n\n',
+          'event: error\n',
+          'data: provider down\n\n',
+        ]),
+      )) {
+        const event = yield* next
+        if (event.event === 'error') {
+          return raise({
+            _tag: 'ProviderError' as const,
+            data: event.data,
+          })
+        }
+        handled.push(event.data)
+      }
+
+      return handled
+    })
+
+    expect(result._tag).toBe('Left')
+    if (result._tag === 'Left') {
+      expect(result.error).toEqual({
+        _tag: 'ProviderError',
+        data: 'provider down',
+      })
+    }
+  })
+
+  it('uses ndjson with validation and async persistence', async () => {
+    type ToolEvent = { readonly id: number }
+    const saved: ToolEvent[] = []
+
+    const validateToolEvent = (
+      value: unknown,
+    ): Either<'InvalidToolEvent', ToolEvent> => {
+      if (
+        value !== null &&
+        typeof value === 'object' &&
+        typeof (value as { readonly id?: unknown }).id === 'number'
+      ) {
+        return right(value as ToolEvent)
+      }
+      return left('InvalidToolEvent')
+    }
+
+    const saveEvent = async (
+      event: ToolEvent,
+    ): Promise<Either<'SaveError', void>> => {
+      saved.push(event)
+      return right(undefined)
+    }
+
+    const result = await either(async function* () {
+      for await (const next of ndjson(byteChunks(['{"id":1}\n{"id":2}\n']))) {
+        const event = yield* next
+        const valid = yield* validateToolEvent(event)
+        yield* await saveEvent(valid)
+      }
+
+      return 'ok' as const
+    })
+
+    expectRight(result, 'ok')
+    expect(saved).toEqual([{ id: 1 }, { id: 2 }])
+  })
+
+  it('passes the abort signal into abortable either generators', async () => {
+    const controller = new AbortController()
+    let injected = false
+
+    const result = await either(
+      controller.signal,
+      // eslint-disable-next-line require-yield
+      async function* ({ signal }) {
+        injected = signal === controller.signal
+        return 'ok' as const
+      },
+    )
+
+    expectRight(result, 'ok')
+    expect(injected).toBe(true)
+  })
+})

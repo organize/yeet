@@ -1,6 +1,6 @@
 # yeet
 
-> A tiny (~2.23 kB gzipped), zero-dependency `Either` / `Result` library for TypeScript. It models success and failure as ordinary values (`Right<A>` and `Left<E>`) and uses generator-based do-notation instead of a method-chaining API. You write normal control flow — `if`, `for`, early `return` — and TypeScript infers the error union from what you yield and raise. An optional build-time transform lowers the generators to plain branches for zero runtime overhead.
+> A tiny (~2.0 kB gzipped core; stream helpers on a separate ~2.7 kB subpath), zero-dependency `Either` / `Result` library for TypeScript. It models success and failure as ordinary values (`Right<A>` and `Left<E>`) and uses generator-based do-notation instead of a method-chaining API. You write normal control flow — `if`, `for`, early `return` — and TypeScript infers the error union from what you yield and raise. An optional build-time transform lowers the generators to plain branches for zero runtime overhead.
 
 `yeet` deliberately has no `map` / `flatMap` / `andThen` / `pipe` surface. The happy path reads top-to-bottom; errors flow through the type system. Package name on npm is `@big-time/yeet`. It is ESM-only and ships TypeScript declarations.
 
@@ -66,7 +66,7 @@ type Either<E, A> = Left<E> | Right<A>
 ```ts
 either(fn: (raise: Raise) => Generator<Either<any, any>, Ret>): Either<E, A>
 either(fn: (raise: Raise) => AsyncGenerator<...>): Promise<Either<E, A>>
-either(signal: AbortSignal, fn: (raise) => AsyncGenerator<...>): Promise<Either<Aborted | E, A>>
+either(signal: AbortSignal, fn: (raise: AbortRaise) => AsyncGenerator<...>): Promise<Either<Aborted | E, A>>
 ```
 
 Sync:
@@ -107,14 +107,100 @@ const config = yield* (await raise(() => JSON.parse(readConfigFile())))
 ```
 
 Cancellation: pass an `AbortSignal` first. If it aborts mid-run, the result is `Left<Aborted>`.
+The injected `raise` is an `AbortRaise`, so use `raise.signal` when you also
+need `raise`, or destructure `async function* ({ signal })` when you only need
+the signal.
 
 ```ts
-const result = await either(signal, async function* () {
+const result = await either(signal, async function* ({ signal }) {
   const a = yield* await step1()
-  const b = yield* await step2(a)
+  const b = yield* await step2(a, signal)
   return b
 })
 ```
+
+## streams and bytes
+
+Stream helpers are dependency-free and live on a separate subpath:
+
+```ts
+import {
+  bytes,
+  text,
+  json,
+  chunks,
+  consume,
+  collectText,
+  lines,
+  ndjson,
+  sse,
+} from '@big-time/yeet/stream'
+```
+
+Use `bytes` / `text` / `json` when you want one final bounded value:
+
+```ts
+const result = await either(signal, async function* ({ signal }) {
+  const file = yield* await bytes(request, { maxBytes: 25_000_000, signal })
+  const doc = yield* await extractText(file)
+  return yield* await indexDocument(doc)
+})
+// Promise<Either<Aborted | StreamError | ExtractTextError | IndexDocumentError, IndexedDocument>>
+```
+
+Use `collectText` for AI SDK-style text deltas when you need the final string.
+It avoids allocating a `Right` for every successful chunk:
+
+```ts
+const result = await either(signal, async function* ({ signal }) {
+  return yield* await collectText(generation.textStream, {
+    tee: (delta) => writer.write(delta),
+    maxChars: 200_000,
+    signal,
+    error: providerError.promise,
+  })
+})
+// Promise<Either<Aborted | StreamError, string>>
+```
+
+Use `consume(source, { each, signal })` when you only need side effects while
+draining a stream. `each` may return a `Left` to stop early; throws and rejected
+callbacks become `Left<StreamConsumerError>`.
+
+Use `chunks` / `lines` / `ndjson` / `sse` when each streamed item should compose
+inside `either`:
+
+```ts
+const result = await either(signal, async function* (raise) {
+  const res = yield* await raise(fetch(url, { signal: raise.signal }))
+
+  for await (const next of sse(res.body, { signal: raise.signal })) {
+    const event = yield* next
+    if (event.event === 'error') return raise({ _tag: 'ProviderError', data: event.data })
+    yield* await handleProviderEvent(event)
+  }
+
+  return 'done' as const
+})
+// Promise<Either<Aborted | Rejected | StreamError | ProviderError | HandleProviderEventError, "done">>
+```
+
+```ts
+const result = await either(signal, async function* ({ signal }) {
+  for await (const next of ndjson(toolResultStream, { maxBytes: 1_000_000, signal })) {
+    const event = yield* next
+    const valid = yield* validateToolEvent(event)
+    yield* await saveEvent(valid)
+  }
+  return 'ok' as const
+})
+// Promise<Either<Aborted | StreamError | ValidateToolEventError | SaveEventError, "ok">>
+```
+
+Cancellation is cooperative. Pass the same signal to `either(signal, ...)`, the
+stream helper, and the underlying I/O operation. The driver can stop advancing
+and close iterators, but it cannot interrupt a source that ignores the signal
+and never settles.
 
 ## capture — get a Left as a value instead of short-circuiting
 
@@ -270,6 +356,7 @@ A call is lowered only when it is a direct `either(function* () { ... })` litera
 - Use `return raise(error)` for typed early exit. `raise` is the generator's first parameter. `raise('X')` alone (without `return`) just builds a `Left`; you usually `return` it.
 - Don't annotate the error type — it is inferred. Use `as const` on string-literal errors when you want a narrow literal type: `return raise('Inactive' as const)`.
 - Async: `const x = yield* await fetchThing()` where `fetchThing` returns `Promise<Either>`. Wrap raw promises and throwing starts with `raise(...)` so rejections/throws become `Left<Rejected>`.
+- Streams: import helpers from `@big-time/yeet/stream`, not the root. Use `collectText` / `consume` for hot text-delta drains, and `for await (const next of ndjson(...) | sse(...)) { const item = yield* next }` for structured streams.
 - Check results with `isLeft` / `isRight` or `result._tag === 'Left'`.
 - Choose the runner by intent: `either` (stop on first error), `validate` (collect all errors), `firstOf` (first success), `collect` / `collectAll` (partition), `all` (concurrent, first error or tuple), `capture` (treat a `Left` as a value).
 - Avoid `this` / `arguments` inside `either` generators (also disables the build-time transform).
@@ -283,6 +370,10 @@ either capture validate firstOf collect all collectAll
 ensure ensureNotNull raise
 fromJSON isSerializedEither serializedEitherSchema eitherSchema
 fold foldAsync
+stream subpath: bytes text json chunks consume collectText lines ndjson sse
 types: Either, Left, Right, Rejected, Aborted, Check, Raise, Strategy, Step,
-       SerializedEither, SerializedLeft, SerializedRight, Collected, InferE, InferA
+       SerializedEither, SerializedLeft, SerializedRight, Collected, InferE, InferA,
+       StreamError, StreamReadError, StreamExternalError, StreamConsumerError,
+       StreamTooLarge, TextTooLarge, LineTooLarge, InvalidChunk, DecodeError,
+       ParseError, ByteSource, StreamSource, SseEvent, AbortRaise
 ```

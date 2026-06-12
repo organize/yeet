@@ -1,0 +1,107 @@
+# yeet
+
+`@big-time/yeet` is a tiny, dependency-free, ESM-only `Either` library for
+TypeScript. It uses `Left<E>` / `Right<A>` values and generator-based
+do-notation instead of `.map`, `.flatMap`, `.andThen`, `.pipe`, or `orElse`.
+
+## Core idiom
+
+```ts
+import { either, left, right, type Either } from '@big-time/yeet'
+
+const result = either(function* (raise) {
+  const user = yield* getUser(id)
+  if (!user.active) return raise('Inactive' as const)
+  const orders = yield* getOrders(user.id)
+  return { user, orders }
+})
+// Either<UserError | "Inactive" | OrderError, { user: User; orders: Order[] }>
+```
+
+Rules for generated code:
+
+- Use `yield* eitherValue` inside `either(...)`.
+- Use `return raise(error)` for typed early exit.
+- For async `Promise<Either<E, A>>`, write `const x = yield* await step()`.
+- For raw promises or starts that can throw, write `yield* await raise(promise)`
+  or `yield* await raise(() => start())`; failures become `Left<Rejected>`.
+- Do not invent method chains. Yeet intentionally has no chain API.
+- Do not annotate the generator error type; let TypeScript infer it.
+
+## Cancellation
+
+```ts
+const result = await either(signal, async function* ({ signal }) {
+  const user = yield* await fetchUser(id, signal)
+  return user
+})
+// Promise<Either<Aborted | FetchUserError, User>>
+```
+
+Cancellation is cooperative. Pass the same signal to `either`, stream helpers,
+and underlying I/O.
+When you also need `raise`, use `raise.signal`.
+
+## Streams
+
+Stream helpers are imported from `@big-time/yeet/stream`, not the root:
+
+```ts
+import { bytes, collectText, consume, ndjson, sse } from '@big-time/yeet/stream'
+```
+
+Use `bytes` / `text` / `json` for one bounded final value:
+
+```ts
+const result = await either(signal, async function* ({ signal }) {
+  const file = yield* await bytes(request, { maxBytes: 25_000_000, signal })
+  const doc = yield* await extractText(file)
+  return yield* await indexDocument(doc)
+})
+```
+
+Use `collectText` or `consume` for hot AI text-delta drains; these avoid a
+`Right` allocation per successful chunk:
+
+```ts
+const result = await either(signal, async function* ({ signal }) {
+  return yield* await collectText(generation.textStream, {
+    tee: (delta) => writer.write(delta),
+    maxChars: 200_000,
+    signal,
+  })
+})
+```
+
+Use `ndjson` / `sse` when each parsed item should compose with `yield*`:
+
+```ts
+const result = await either(signal, async function* (raise) {
+  const res = yield* await raise(fetch(url, { signal: raise.signal }))
+
+  for await (const next of sse(res.body, { signal: raise.signal })) {
+    const event = yield* next
+    if (event.event === 'error') return raise(event.data)
+    yield* await handleProviderEvent(event)
+  }
+
+  return 'done' as const
+})
+```
+
+Main stream APIs:
+
+`bytes`, `text`, `json`, `chunks`, `consume`, `collectText`, `lines`, `ndjson`,
+`sse`.
+
+## Other helpers
+
+Use `capture` to treat a `Left` as data, `all` for concurrent tuple inputs,
+`collectAll` to partition concurrent inputs, `validate` to accumulate all
+errors, `firstOf` for first success, and `collect` to partition yielded values.
+
+Serialization helpers: `fromJSON`, `isSerializedEither`,
+`serializedEitherSchema`, `eitherSchema`.
+
+Optional optimizer: import a bundler adapter from `@big-time/yeet/unplugin/*`
+to lower supported inline generator calls at build time.
