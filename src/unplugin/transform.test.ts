@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { transformYeet } from './transform.ts'
 
 const YEET_SOURCE = new URL('../index.ts', import.meta.url).href
+const STREAM_SOURCE = new URL('../stream.ts', import.meta.url).href
 
 type RunnableModule = {
   run: (...args: unknown[]) => unknown
@@ -38,6 +39,7 @@ async function runBoth(
   `
   const transformed = transformYeet(source, 'fixture.ts', {
     moduleNames: [YEET_SOURCE],
+    streamModuleNames: [STREAM_SOURCE],
   })
 
   expect(transformed).not.toBeNull()
@@ -202,6 +204,16 @@ describe('yeet unplugin transform', () => {
         })
       `,
       `
+        import { either } from '@big-time/yeet'
+        import { ndjson } from 'not-yeet-stream'
+        either(async function* () {
+          for await (const next of ndjson()) {
+            const value = yield* next
+            return value
+          }
+        })
+      `,
+      `
         import { validate, right } from '@big-time/yeet'
         validate(function* (check) {
           const escaped = check
@@ -316,6 +328,70 @@ describe('yeet unplugin transform', () => {
     expect(simplifyEither(thrown.optimized)).toEqual(
       simplifyEither(thrown.runtime),
     )
+  })
+
+  it('lowers async either bodies that consume bounded stream helpers', async () => {
+    const body = `
+      import { json } from ${JSON.stringify(STREAM_SOURCE)}
+
+      export async function run() {
+        return either(async function* () {
+          const payload = yield* await json(
+            new TextEncoder().encode('{"ok":true}')
+          )
+          return payload
+        })
+      }
+    `
+
+    const { runtime, optimized, code } = await runBoth(body)
+
+    expect(simplifyEither(optimized)).toEqual(simplifyEither(runtime))
+    expect(code).toContain('await json')
+    expect(code).toContain('_tag === "Left"')
+    expect(code).not.toContain('function*')
+  })
+
+  it('lowers structured stream item loops from yeet stream helpers', async () => {
+    const body = `
+      import { ndjson } from ${JSON.stringify(STREAM_SOURCE)}
+
+      export async function run(bad) {
+        const source = bad ? '{"id":' : '{"id":1}\\n{"id":2}\\n'
+
+        return either(async function* () {
+          const ids = []
+          for await (const next of ndjson(new TextEncoder().encode(source))) {
+            const event = yield* next
+            ids.push(event.id)
+          }
+          return ids
+        })
+      }
+    `
+
+    const success = await runBoth(body, [false])
+    expect(simplifyEither(success.optimized)).toEqual(
+      simplifyEither(success.runtime),
+    )
+    expect(simplifyEither(success.optimized)).toEqual({
+      _tag: 'Right',
+      value: [1, 2],
+    })
+    expect(success.code).toContain('for await')
+    expect(success.code).toContain('_tag === "Left"')
+    expect(success.code).not.toContain('yield* next')
+    expect(success.code).not.toContain('function*')
+
+    const failure = await runBoth(body, [true])
+    expect(simplifyEither(failure.runtime)).toMatchObject({
+      _tag: 'Left',
+      error: { _tag: 'ParseError', format: 'ndjson' },
+    })
+    expect(simplifyEither(failure.optimized)).toMatchObject({
+      _tag: 'Left',
+      error: { _tag: 'ParseError', format: 'ndjson' },
+    })
   })
 
   it('matches runtime behavior for async promise rejection capture', async () => {

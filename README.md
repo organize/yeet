@@ -281,9 +281,24 @@ const result = await either(signal, async function* (raise) {
 // >
 ```
 
-In abortable flows, the injected `raise` function also carries the signal as
-`raise.signal`. If you only need the signal, destructure the first parameter:
-`async function* ({ signal }) { ... }`.
+In abortable flows, the first callback parameter is an `AbortRaise`:
+
+```ts
+type AbortRaise = Raise & { readonly signal: AbortSignal }
+```
+
+Use `raise.signal` when you also need `raise`. If you only need the signal,
+destructure the first parameter:
+
+```ts
+const result = await either(signal, async function* ({ signal }) {
+  return yield* await fetchUser(id, signal)
+})
+```
+
+For compatibility, yeet also passes the same signal as the callback's second
+argument: `async function* (raise, signal) { ... }`. Prefer `raise.signal` or
+`({ signal })` in new code so the source of the signal has one obvious home.
 
 When the signal aborts, yeet returns `Left<Aborted>` and calls `gen.return()`,
 so `finally`, `using`, and `await using` cleanup get their turn.
@@ -326,6 +341,12 @@ bodies, AI SDK deltas, NDJSON tool streams, and server-sent events. The rule is
 simple: helpers that return one final value return `Promise<Either<...>>`;
 helpers that produce many values are async iterables of `Either`, so each item
 can be handled with the same old `yield*`.
+
+Stream helpers also compose with the build-time optimizer in non-abortable
+flows. Bounded steps like `yield* await json(body)` and structured item steps
+like `for await (const next of ndjson(body)) { const item = yield* next }`
+lower to plain `await`s, loops, and `Left` checks. The stream does its real
+work; the do-notation furniture disappears before the guests arrive.
 
 ### Bounded Bodies
 
@@ -936,13 +957,40 @@ const result = e(function* () {
 It lowers these proven shapes:
 
 - direct `yield* someEither()` steps in `either`
+- direct `yield* await somePromiseReturningEither()` steps in async `either`,
+  including bounded stream helpers like `json(body)` and `collectText(stream)`
+- direct `yield* next` steps where `next` is a `const` binding from
+  `for await (const next of ndjson(...) | sse(...) | lines(...) | chunks(...))`
 - direct `yield* check(someEither())` steps in `validate`
 - direct `yield someEither` attempts in `firstOf` and `collect`
 
+On a local `bun run bench:quick`-style run, the transform shook out roughly like
+this. The exact numbers will drift with hardware, runtime, warmup, and the
+JIT's morning mood, but the shape is the useful part:
+
+| Shape                                           | Rough win |
+| ----------------------------------------------- | --------- |
+| `either`: single sync `yield*` success          | `~31x`    |
+| `either`: two sync `yield*` successes           | `~8.5x`   |
+| `either`: sync `Left` short-circuit             | `~13x`    |
+| `either`: two async `yield* await` successes    | `~5.9x`   |
+| `either`: async `Left` short-circuit            | `~7.3x`   |
+| `validate`: two checks                          | `~10x`    |
+| `firstOf`: three attempts                       | `~10-11x` |
+| Stream: `yield* await json(body)`               | `~2.6x`   |
+| Stream: `yield* next` in `ndjson` / `sse` loops | `~1.2x`   |
+| `collect`: many yielded items                   | `~1x`     |
+
+Tiny flows win hardest because the generator driver is most of the work. Once
+you are parsing JSON, walking many items, or calling real I/O, the plugin still
+removes the do-notation overhead, but the river is wider than the boat.
+
 It bails on the abortable overload, escaped `raise` / `check`, `this`,
-`arguments`, indirect `yield*` values, and expression positions where hoisting
-would change evaluation. The runtime library remains the interpreter underneath,
-as dependable as a man in a dark suit explaining how rain becomes a river.
+`arguments`, unproven indirect `yield*` values, non-`const` stream item
+bindings, stream helpers from other modules, and expression positions where
+hoisting would change evaluation. The runtime library remains the interpreter
+underneath, as dependable as a man in a dark suit explaining how rain becomes a
+river.
 
 ## Low-Level Folding
 
@@ -976,14 +1024,14 @@ the keys to the old truck.
 
 ### Generator Runners
 
-| API                       | Description                                     |
-| ------------------------- | ----------------------------------------------- |
-| `either(fn)`              | Short-circuiting sync or async generator runner |
-| `either(signal, asyncFn)` | Abort-aware async generator runner              |
-| `capture(either)`         | Preserve a `Left` as data inside `either`       |
-| `validate(fn)`            | Accumulate every yielded error                  |
-| `firstOf(fn)`             | Return the first yielded `Right`                |
-| `collect(fn)`             | Partition yielded values into errors and values |
+| API                       | Description                                                              |
+| ------------------------- | ------------------------------------------------------------------------ |
+| `either(fn)`              | Short-circuiting sync or async generator runner                          |
+| `either(signal, asyncFn)` | Abort-aware async runner; `asyncFn` receives `AbortRaise` and the signal |
+| `capture(either)`         | Preserve a `Left` as data inside `either`                                |
+| `validate(fn)`            | Accumulate every yielded error                                           |
+| `firstOf(fn)`             | Return the first yielded `Right`                                         |
+| `collect(fn)`             | Partition yielded values into errors and values                          |
 
 ### Concurrency
 
@@ -1076,6 +1124,35 @@ The current benchmark suite compares common `either` flows against
 `better-result`, includes sync, async, short-circuit, validation, first success,
 collection, plugin-transformed scenarios, and stream helpers against vanilla
 async-iteration code.
+
+For a rough overhead map, `src/overhead.bench.ts` compares the same core flows
+four ways. These numbers are from a local quick run and are normalized per row
+to vanilla `try` / `throw` / `catch` as `1x`. Higher is faster:
+
+| Scenario                     | Vanilla exceptions | `better-result` | `yeet`  | `yeet` lowered |
+| ---------------------------- | ------------------ | --------------- | ------- | -------------- |
+| Sync two successes           | `1x`               | `0.08x`         | `0.09x` | `0.48x`        |
+| Sync failure / short-circuit | `1x`               | `2.4x`          | `2.6x`  | `19x`          |
+| Async two successes          | `1x`               | `0.10x`         | `0.13x` | `0.60x`        |
+| Complex checkout success     | `1x`               | `0.08x`         | `0.09x` | `0.59x`        |
+
+That is the honest bargain. On tiny success paths, plain JavaScript with
+exceptions is the low-overhead baseline. On failure paths, exceptions pay for
+their dramatic exit, while `Either` is just data walking through a door. Turn on
+the unplugin and yeet gets much closer to the baseline on happy paths while
+keeping the data-shaped exit on sad ones.
+
+Stream helpers have a separate row because they do more than shuttle control
+flow. This compares a tiny hand-written parser against yeet's NDJSON helper, and
+then against the same yeet code after the build-time transform:
+
+| Scenario              | Manual parser | `yeet` stream | `yeet` stream lowered |
+| --------------------- | ------------- | ------------- | --------------------- |
+| NDJSON stream success | `1x`          | `0.49x`       | `0.69x`               |
+
+The stream helper still does real parsing, decoding, bounds, cleanup, and
+error-shaping work. The transform removes generator consumption overhead; it
+does not make a fully-featured stream parser vanish into a hand-rolled loop.
 
 ## License
 
