@@ -40,7 +40,9 @@ const result = await either(signal, async function* ({ signal }) {
 
 Cancellation is cooperative. Pass the same signal to `either`, stream helpers,
 and underlying I/O.
-When you also need `raise`, use `raise.signal`.
+When you also need `raise`, use `raise.signal`. The same signal is passed as the
+callback's second argument for compatibility, but prefer `raise.signal` or
+`async function* ({ signal })` in new examples.
 
 ## Streams
 
@@ -59,6 +61,11 @@ const result = await either(signal, async function* ({ signal }) {
   return yield* await indexDocument(doc)
 })
 ```
+
+Stream helpers also compose with the build-time optimizer in non-abortable
+flows: `yield* await json(body)` and `yield* next` where `next` is a `const`
+item from yeet `ndjson` / `sse` / `lines` / `chunks` lower to plain checks.
+Abortable `either(signal, ...)` stays on the runtime path.
 
 Use `collectText` or `consume` for hot AI text-delta drains; these avoid a
 `Right` allocation per successful chunk:
