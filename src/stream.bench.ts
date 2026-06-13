@@ -3,8 +3,12 @@ import { afterAll, bench, describe } from 'vitest'
 import { BENCH_OPTS } from './bench-options.ts'
 import { type Either } from './either.ts'
 import { bytes, collectText, consume, ndjson, sse } from './stream.ts'
+import yeet from './unplugin.ts'
 
 const BENCH_BATCH = readPositiveInt('BENCH_BATCH', 16)
+const YEET_SOURCE = new URL('./index.ts', import.meta.url).href
+const STREAM_SOURCE = new URL('./stream.ts', import.meta.url).href
+const FIXTURE_ID = 'src/stream.bench.fixture.js'
 const encoder = new TextEncoder()
 const decoder = new TextDecoder()
 const benchSink = { value: undefined as unknown }
@@ -41,6 +45,129 @@ const SSE_TEXT = Array.from({ length: 48 }, (_, index) => {
 }).join('\n')
 
 const SSE_CHUNKS = chunkText(SSE_TEXT, 47).map((chunk) => encoder.encode(chunk))
+
+type PluginBenchModule = {
+  jsonDocument: (index: number) => Promise<unknown>
+  ndjsonLoop: (index: number) => Promise<unknown>
+  sseLoop: (index: number) => Promise<unknown>
+}
+
+type RawPlugin = {
+  readonly transform?: {
+    readonly handler?: (
+      code: string,
+      id: string,
+    ) =>
+      | string
+      | { readonly code: string }
+      | null
+      | Promise<
+          | string
+          | {
+              readonly code: string
+            }
+          | null
+        >
+  }
+}
+
+const PLUGIN_BENCH_SOURCE = `
+  import { either } from ${JSON.stringify(YEET_SOURCE)}
+  import { json, ndjson, sse } from ${JSON.stringify(STREAM_SOURCE)}
+
+  const encoder = new TextEncoder()
+  const JSON_DOCS = [
+    encoder.encode(JSON.stringify({ id: 1, title: "one", ok: true })),
+    encoder.encode(JSON.stringify({ id: 2, title: "two", ok: true })),
+  ]
+
+  const NDJSON_A = chunkText(
+    Array.from({ length: 48 }, (_, index) =>
+      JSON.stringify({ id: index, token: "tool-" + index })
+    ).join("\\n") + "\\n",
+    53,
+  ).map((chunk) => encoder.encode(chunk))
+
+  const NDJSON_B = chunkText(
+    Array.from({ length: 48 }, (_, index) =>
+      JSON.stringify({ id: index + 48, token: "tool-" + index })
+    ).join("\\n") + "\\n",
+    53,
+  ).map((chunk) => encoder.encode(chunk))
+
+  const SSE_A = chunkText(sseText(0), 47).map((chunk) => encoder.encode(chunk))
+  const SSE_B = chunkText(sseText(48), 47).map((chunk) => encoder.encode(chunk))
+
+  function bit(index) {
+    return index & 1
+  }
+
+  export async function jsonDocument(index) {
+    return either(async function* () {
+      const doc = yield* await json(JSON_DOCS[bit(index)])
+      return doc.id
+    })
+  }
+
+  export async function ndjsonLoop(index) {
+    const chunks = bit(index) === 0 ? NDJSON_A : NDJSON_B
+
+    return either(async function* () {
+      let count = 0
+      let sum = 0
+      for await (const next of ndjson(asyncValues(chunks))) {
+        const event = yield* next
+        count++
+        sum += event.id
+      }
+      return { count, sum }
+    })
+  }
+
+  export async function sseLoop(index) {
+    const chunks = bit(index) === 0 ? SSE_A : SSE_B
+
+    return either(async function* () {
+      let count = 0
+      let chars = 0
+      for await (const next of sse(asyncValues(chunks))) {
+        const event = yield* next
+        count++
+        chars += event.data.length
+      }
+      return { count, chars }
+    })
+  }
+
+  async function* asyncValues(values) {
+    for (let index = 0; index < values.length; index++) yield values[index]
+  }
+
+  function sseText(offset) {
+    return Array.from({ length: 48 }, (_, index) => {
+      const id = index + offset
+      return [
+        "id: " + id,
+        index % 5 === 0 ? "event: tool-call" : "event: text-delta",
+        "data: " + JSON.stringify({ index: id, delta: "token-" + id }),
+        "",
+      ].join("\\n")
+    }).join("\\n")
+  }
+
+  function chunkText(input, size) {
+    const chunks = []
+    for (let index = 0; index < input.length; index += size) {
+      chunks.push(input.slice(index, index + size))
+    }
+    return chunks
+  }
+`
+
+const pluginRuntime = await importPluginBenchModule(PLUGIN_BENCH_SOURCE)
+const pluginOptimized = await importPluginBenchModule(
+  await transformWithPlugin(PLUGIN_BENCH_SOURCE),
+)
 
 afterAll(() => {
   void benchSink.value
@@ -118,10 +245,85 @@ describe('streams: sse', () => {
   )
 })
 
+benchPluginPair('streams: unplugin', 'json() in either', 'jsonDocument')
+benchPluginPair('streams: unplugin', 'ndjson() item loop', 'ndjsonLoop')
+benchPluginPair('streams: unplugin', 'sse() item loop', 'sseLoop')
+
 async function consumeBatch(fn: () => Promise<unknown>): Promise<void> {
   let value: unknown
   for (let batch = 0; batch < BENCH_BATCH; batch++) value = await fn()
   benchSink.value = value
+}
+
+async function consumePluginBatch(
+  module: PluginBenchModule,
+  fn: keyof PluginBenchModule,
+  next: () => number,
+): Promise<void> {
+  let value: unknown
+  for (let batch = 0; batch < BENCH_BATCH; batch++) {
+    value = await module[fn](next())
+  }
+  benchSink.value = value
+}
+
+function benchPluginPair(
+  suite: string,
+  name: string,
+  fn: keyof PluginBenchModule,
+): void {
+  describe(suite, () => {
+    const runtimeIndex = indexer()
+    bench(
+      name,
+      async () => {
+        await consumePluginBatch(pluginRuntime, fn, runtimeIndex)
+      },
+      BENCH_OPTS,
+    )
+
+    const optimizedIndex = indexer()
+    bench(
+      `${name} (unplugin transformed)`,
+      async () => {
+        await consumePluginBatch(pluginOptimized, fn, optimizedIndex)
+      },
+      BENCH_OPTS,
+    )
+  })
+}
+
+function indexer(): () => number {
+  let index = 0
+  return () => index++
+}
+
+function moduleUrl(code: string): string {
+  return `data:text/javascript;base64,${Buffer.from(code).toString('base64')}`
+}
+
+async function importPluginBenchModule(
+  code: string,
+): Promise<PluginBenchModule> {
+  return (await import(moduleUrl(code))) as PluginBenchModule
+}
+
+async function transformWithPlugin(code: string): Promise<string> {
+  const plugin = yeet.raw({
+    moduleNames: [YEET_SOURCE],
+    streamModuleNames: [STREAM_SOURCE],
+  }) as RawPlugin
+  const handler = plugin.transform?.handler
+  if (handler === undefined) {
+    throw new TypeError('yeet.raw() did not expose a transform handler')
+  }
+
+  const result = await handler(code, FIXTURE_ID)
+  if (result === null) {
+    throw new Error('yeet unplugin did not transform the stream bench fixture')
+  }
+
+  return typeof result === 'string' ? result : result.code
 }
 
 async function vanillaBytes(): Promise<Uint8Array> {

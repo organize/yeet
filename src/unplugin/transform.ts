@@ -5,6 +5,7 @@ import * as t from '@babel/types'
 
 export type YeetTransformOptions = {
   moduleNames?: readonly string[]
+  streamModuleNames?: readonly string[]
 }
 
 export type YeetTransformResult = {
@@ -16,6 +17,7 @@ export type YeetTransformResult = {
 
 type CombinatorName = 'either' | 'validate' | 'firstOf' | 'collect'
 type HelperKey = 'raise' | 'left' | 'right'
+type StreamItemHelperName = 'chunks' | 'lines' | 'ndjson' | 'sse'
 
 type HelperIds = {
   readonly ids: Map<HelperKey, t.Identifier>
@@ -24,6 +26,7 @@ type HelperIds = {
 
 type TransformState = {
   readonly moduleNames: readonly string[]
+  readonly streamModuleNames: readonly string[]
   readonly helpers: Map<string, HelperIds>
   optimized: number
   bailed: number
@@ -37,11 +40,18 @@ type YieldRewrite = {
 }
 
 const DEFAULT_MODULE_NAMES = ['@big-time/yeet', 'yeet']
+const DEFAULT_STREAM_MODULE_NAMES = ['@big-time/yeet/stream', 'yeet/stream']
 const COMBINATOR_NAMES = new Set<CombinatorName>([
   'either',
   'validate',
   'firstOf',
   'collect',
+])
+const STREAM_ITEM_HELPERS = new Set<StreamItemHelperName>([
+  'chunks',
+  'lines',
+  'ndjson',
+  'sse',
 ])
 const HELPER_IMPORTS = {
   raise: 'raise',
@@ -72,6 +82,7 @@ export function transformYeet(
 
   const state: TransformState = {
     moduleNames: options.moduleNames ?? DEFAULT_MODULE_NAMES,
+    streamModuleNames: options.streamModuleNames ?? DEFAULT_STREAM_MODULE_NAMES,
     helpers: new Map(),
     optimized: 0,
     bailed: 0,
@@ -169,7 +180,9 @@ function lowerEitherCall(
   const raiseName = raiseParam?.isIdentifier()
     ? raiseParam.node.name
     : undefined
-  if (!isSafeEitherGenerator(fnPath, raiseName)) return false
+  if (!isSafeEitherGenerator(fnPath, raiseName, state.streamModuleNames)) {
+    return false
+  }
 
   const programPath = callPath.scope.getProgramParent().path
   if (!programPath.isProgram()) return false
@@ -332,6 +345,7 @@ function lowerCollectCall(callPath: NodePath<t.CallExpression>): boolean {
 function isSafeEitherGenerator(
   fnPath: NodePath<t.FunctionExpression>,
   raiseName: string | undefined,
+  streamModuleNames: readonly string[],
 ): boolean {
   const raiseBinding =
     raiseName === undefined ? undefined : fnPath.scope.getBinding(raiseName)
@@ -377,7 +391,7 @@ function isSafeEitherGenerator(
       }
     },
     YieldExpression(path: NodePath<t.YieldExpression>) {
-      if (!isLowerableYield(path)) {
+      if (!isLowerableYield(path, streamModuleNames)) {
         safe = false
         path.stop()
       }
@@ -526,12 +540,20 @@ function isDirectYieldExpressionStatement(
   return statement.get('expression') === path
 }
 
-function isLowerableYield(path: NodePath<t.YieldExpression>): boolean {
+function isLowerableYield(
+  path: NodePath<t.YieldExpression>,
+  streamModuleNames: readonly string[],
+): boolean {
   const argument = path.node.argument
   if (!path.node.delegate || argument === null || argument === undefined) {
     return false
   }
-  if (!isPlausibleEitherExpression(argument)) return false
+  if (
+    !isPlausibleEitherExpression(argument) &&
+    !isProvenStreamItemYield(path, argument, streamModuleNames)
+  ) {
+    return false
+  }
 
   const statement = path.getStatementParent()
   if (statement === null) return false
@@ -539,13 +561,112 @@ function isLowerableYield(path: NodePath<t.YieldExpression>): boolean {
 }
 
 function isPlausibleEitherExpression(node: t.Expression): boolean {
-  if (t.isCallExpression(node)) return true
-  if (t.isAwaitExpression(node) && t.isCallExpression(node.argument))
+  const expression = skipTransparentExpressionNode(node)
+  if (t.isCallExpression(expression)) return true
+  if (
+    t.isAwaitExpression(expression) &&
+    t.isCallExpression(expression.argument)
+  ) {
     return true
-  if (t.isTSAsExpression(node) || t.isTSSatisfiesExpression(node)) {
-    return isPlausibleEitherExpression(node.expression)
   }
   return false
+}
+
+function isProvenStreamItemYield(
+  path: NodePath<t.YieldExpression>,
+  node: t.Expression,
+  streamModuleNames: readonly string[],
+): boolean {
+  const expression = skipTransparentExpressionNode(node)
+  if (!t.isIdentifier(expression)) return false
+
+  const binding = path.scope.getBinding(expression.name)
+  return binding === undefined
+    ? false
+    : isStreamForOfBinding(binding.path, streamModuleNames)
+}
+
+function isStreamForOfBinding(
+  bindingPath: NodePath<t.Node>,
+  streamModuleNames: readonly string[],
+): boolean {
+  let declarator: NodePath<t.VariableDeclarator>
+  if (bindingPath.isVariableDeclarator()) {
+    declarator = bindingPath
+  } else {
+    if (!bindingPath.isIdentifier()) return false
+
+    const parent = bindingPath.parentPath
+    if (!parent.isVariableDeclarator()) return false
+    if (parent.get('id') !== bindingPath) return false
+    declarator = parent
+  }
+
+  if (!declarator.get('id').isIdentifier()) return false
+
+  const declaration = declarator.parentPath
+  if (!declaration.isVariableDeclaration()) return false
+  if (declaration.node.kind !== 'const') return false
+
+  const forOf = declaration.parentPath
+  if (!forOf.isForOfStatement()) return false
+  if (!forOf.node.await) return false
+  if (forOf.get('left') !== declaration) return false
+
+  return isStreamItemSource(forOf.get('right'), streamModuleNames)
+}
+
+function isStreamItemSource(
+  path: NodePath<t.Expression>,
+  streamModuleNames: readonly string[],
+): boolean {
+  const expression = skipTransparentExpressionPath(path)
+  if (!expression.isCallExpression()) return false
+
+  const callee = expression.get('callee')
+  if (!callee.isIdentifier()) return false
+
+  const bindingPath = expression.scope.getBinding(callee.node.name)?.path
+  if (!bindingPath?.isImportSpecifier()) return false
+
+  const imported = bindingPath.node.imported
+  const name = t.isIdentifier(imported) ? imported.name : imported.value
+  if (!STREAM_ITEM_HELPERS.has(name as StreamItemHelperName)) return false
+
+  const declaration = bindingPath.parentPath
+  return (
+    declaration.isImportDeclaration() &&
+    streamModuleNames.includes(declaration.node.source.value)
+  )
+}
+
+function skipTransparentExpressionNode(node: t.Expression): t.Expression {
+  if (
+    t.isTSAsExpression(node) ||
+    t.isTSSatisfiesExpression(node) ||
+    t.isTSNonNullExpression(node)
+  ) {
+    return skipTransparentExpressionNode(node.expression)
+  }
+  if (t.isParenthesizedExpression(node)) {
+    return skipTransparentExpressionNode(node.expression)
+  }
+  return node
+}
+
+function skipTransparentExpressionPath(
+  path: NodePath<t.Expression>,
+): NodePath<t.Expression> {
+  let current: NodePath<any> = path
+  while (
+    current.isTSAsExpression() ||
+    current.isTSSatisfiesExpression() ||
+    current.isTSNonNullExpression() ||
+    current.isParenthesizedExpression()
+  ) {
+    current = current.get('expression') as NodePath<any>
+  }
+  return current as NodePath<t.Expression>
 }
 
 function isDirectLowerableYieldPosition(
