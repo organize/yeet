@@ -117,7 +117,11 @@ type StopState = {
   readonly initial: Aborted | StreamError | undefined
   readonly cleanup: () => void
 }
-type ReleasableAsyncIterator<T> = AsyncIterator<T> & { release(): void }
+type CloseMode = 'cancel' | 'release'
+type ReleasableAsyncIterator<T> = AsyncIterator<T> & {
+  return(reason?: unknown): Promise<IteratorReturnResult<undefined>>
+  release(): void
+}
 
 const EMPTY_BYTES = new Uint8Array(0)
 const DEFAULT_EVENT = 'message'
@@ -147,6 +151,7 @@ export async function bytes(
   if (iterator._tag === 'Left') return iterator
 
   let close: 'cancel' | 'release' = 'release'
+  let closeReason: unknown
   const canStop = stop.promise !== undefined
 
   try {
@@ -156,6 +161,7 @@ export async function bytes(
         const next = await nextOrStop(iterator.value, stop)
         if (next.done) {
           close = 'cancel'
+          closeReason = cancelReasonFromError(next.error)
           return left(next.error)
         }
         result = next.result
@@ -167,23 +173,29 @@ export async function bytes(
 
       const chunk = asBytes(result.value)
       if (chunk === undefined) {
+        const error = invalidChunk(result.value)
         close = 'cancel'
-        return left(invalidChunk(result.value))
+        closeReason = error
+        return left(error)
       }
 
       total += chunk.byteLength
       if (options.maxBytes !== undefined && total > options.maxBytes) {
+        const error = streamTooLarge(options.maxBytes, total)
         close = 'cancel'
-        return left(streamTooLarge(options.maxBytes, total))
+        closeReason = error
+        return left(error)
       }
       parts.push(chunk)
     }
   } catch (cause) {
+    const error = streamReadError(cause)
     close = 'cancel'
-    return left(streamReadError(cause))
+    closeReason = cause
+    return left(error)
   } finally {
     stop.cleanup()
-    await closeIterator(iterator.value, close)
+    await closeIterator(iterator.value, close, closeReason)
   }
 }
 
@@ -235,7 +247,9 @@ export async function* chunks(
   }
 
   let bytesRead = 0
-  let close: 'cancel' | 'release' = 'release'
+  let close: CloseMode = 'release'
+  let closeReason: unknown
+  let completed = false
   const canStop = stop.promise !== undefined
 
   try {
@@ -245,6 +259,7 @@ export async function* chunks(
         const next = await nextOrStop(iterator.value, stop)
         if (next.done) {
           close = 'cancel'
+          closeReason = cancelReasonFromError(next.error)
           yield left(next.error)
           return
         }
@@ -253,30 +268,39 @@ export async function* chunks(
         result = await iterator.value.next()
       }
 
-      if (result.done === true) return
+      if (result.done === true) {
+        completed = true
+        return
+      }
 
       const chunk = asByteChunk(result.value)
       if (chunk._tag === 'Left') {
         close = 'cancel'
+        closeReason = chunk.error
         yield chunk
         return
       }
 
       bytesRead += chunk.value.byteLength
       if (options.maxBytes !== undefined && bytesRead > options.maxBytes) {
+        const error = streamTooLarge(options.maxBytes, bytesRead)
         close = 'cancel'
-        yield left(streamTooLarge(options.maxBytes, bytesRead))
+        closeReason = error
+        yield left(error)
         return
       }
 
       yield chunk
     }
   } catch (cause) {
+    const error = streamReadError(cause)
     close = 'cancel'
-    yield left(streamReadError(cause))
+    closeReason = cause
+    yield left(error)
   } finally {
     stop.cleanup()
-    await closeIterator(iterator.value, close)
+    if (close === 'release' && !completed) close = 'cancel'
+    await closeIterator(iterator.value, close, closeReason)
   }
 }
 
@@ -300,7 +324,8 @@ export async function consume<T, E, E2 = never>(
   if (stop.initial !== undefined) return left(stop.initial)
 
   const iterator = streamIterator(source)
-  let close: 'cancel' | 'release' = 'release'
+  let close: CloseMode = 'release'
+  let closeReason: unknown
   const canStop = stop.promise !== undefined
 
   try {
@@ -310,6 +335,7 @@ export async function consume<T, E, E2 = never>(
         const next = await nextOrStop(iterator, stop)
         if (next.done) {
           close = 'cancel'
+          closeReason = cancelReasonFromError(next.error)
           return left(next.error)
         }
         result = next.result
@@ -322,6 +348,7 @@ export async function consume<T, E, E2 = never>(
       const item = result.value
       if (item instanceof Left) {
         close = 'cancel'
+        closeReason = item.error
         return item as Left<E>
       }
       const value = item instanceof Right ? item.value : (item as T)
@@ -337,20 +364,23 @@ export async function consume<T, E, E2 = never>(
               : result
       } catch (cause) {
         close = 'cancel'
+        closeReason = cause
         return left(streamConsumerError(cause))
       }
 
       if (isLeftValue(step)) {
         close = 'cancel'
+        closeReason = step.error
         return step
       }
     }
   } catch (cause) {
     close = 'cancel'
+    closeReason = cause
     return left(streamReadError(cause))
   } finally {
     stop.cleanup()
-    await closeIterator(iterator, close)
+    await closeIterator(iterator, close, closeReason)
   }
 }
 
@@ -364,7 +394,8 @@ export async function collectText<E = never>(
   const iterator = streamIterator(source)
   const parts: string[] = []
   let chars = 0
-  let close: 'cancel' | 'release' = 'release'
+  let close: CloseMode = 'release'
+  let closeReason: unknown
   const maxChars = options.maxChars
   const tee = options.tee
   const canStop = stop.promise !== undefined
@@ -376,6 +407,7 @@ export async function collectText<E = never>(
         const next = await nextOrStop(iterator, stop)
         if (next.done) {
           close = 'cancel'
+          closeReason = cancelReasonFromError(next.error)
           return left(next.error)
         }
         result = next.result
@@ -388,14 +420,17 @@ export async function collectText<E = never>(
       const item = result.value
       if (item instanceof Left) {
         close = 'cancel'
+        closeReason = item.error
         return item as Left<E>
       }
 
       const chunk = item instanceof Right ? item.value : (item as string)
       chars += chunk.length
       if (maxChars !== undefined && chars > maxChars) {
+        const error = textTooLarge(maxChars, chars)
         close = 'cancel'
-        return left(textTooLarge(maxChars, chars))
+        closeReason = error
+        return left(error)
       }
 
       if (tee !== undefined) {
@@ -404,6 +439,7 @@ export async function collectText<E = never>(
           if (isPromiseLike(result)) await result
         } catch (cause) {
           close = 'cancel'
+          closeReason = cause
           return left(streamConsumerError(cause))
         }
       }
@@ -412,10 +448,11 @@ export async function collectText<E = never>(
     }
   } catch (cause) {
     close = 'cancel'
+    closeReason = cause
     return left(streamReadError(cause))
   } finally {
     stop.cleanup()
-    await closeIterator(iterator, close)
+    await closeIterator(iterator, close, closeReason)
   }
 }
 
@@ -430,15 +467,21 @@ export function ndjson(
   source: ByteSource,
   options: LineOptions = {},
 ): AsyncGenerator<Either<Aborted | StreamError, unknown>, void, unknown> {
-  return mapLines(source, options, (line) => {
-    if (line.length === 0) return undefined
+  return mapLines(
+    source,
+    options,
+    (line) => {
+      if (line.length === 0) return undefined
 
-    try {
-      return right(JSON.parse(line) as unknown)
-    } catch (cause) {
-      return left(parseError('ndjson', cause))
-    }
-  })
+      try {
+        return right(JSON.parse(line) as unknown)
+      } catch (cause) {
+        return left(parseError('ndjson', cause))
+      }
+    },
+    undefined,
+    { continueOnMappedLeft: true },
+  )
 }
 
 export function sse(
@@ -522,6 +565,7 @@ async function* mapLines<A>(
   options: LineOptions,
   map: (line: string) => Either<StreamError, A> | undefined,
   finish?: () => Either<StreamError, A> | undefined,
+  behavior: { readonly continueOnMappedLeft?: boolean } = {},
 ): AsyncGenerator<Either<Aborted | StreamError, A>, void, unknown> {
   const stop = createStopState(options)
   if (stop.initial !== undefined) {
@@ -543,7 +587,10 @@ async function* mapLines<A>(
   let carry = ''
   let bytesRead = 0
   let lineBytes = 0
-  let close: 'cancel' | 'release' = 'release'
+  let close: CloseMode = 'release'
+  let closeReason: unknown
+  let completed = false
+  let yieldedError: unknown
   const canStop = stop.promise !== undefined
   const maxLineBytes = options.maxLineBytes
 
@@ -554,6 +601,7 @@ async function* mapLines<A>(
         const next = await nextOrStop(iterator.value, stop)
         if (next.done) {
           close = 'cancel'
+          closeReason = cancelReasonFromError(next.error)
           yield left(next.error)
           return
         }
@@ -566,15 +614,19 @@ async function* mapLines<A>(
 
       const chunk = asBytes(result.value)
       if (chunk === undefined) {
+        const error = invalidChunk(result.value)
         close = 'cancel'
-        yield left(invalidChunk(result.value))
+        closeReason = error
+        yield left(error)
         return
       }
 
       bytesRead += chunk.byteLength
       if (options.maxBytes !== undefined && bytesRead > options.maxBytes) {
+        const error = streamTooLarge(options.maxBytes, bytesRead)
         close = 'cancel'
-        yield left(streamTooLarge(options.maxBytes, bytesRead))
+        closeReason = error
+        yield left(error)
         return
       }
 
@@ -585,8 +637,10 @@ async function* mapLines<A>(
 
           lineBytes += index - lineStart
           if (lineBytes > maxLineBytes) {
+            const error = lineTooLarge(maxLineBytes, lineBytes)
             close = 'cancel'
-            yield left(lineTooLarge(maxLineBytes, lineBytes))
+            closeReason = error
+            yield left(error)
             return
           }
 
@@ -596,8 +650,10 @@ async function* mapLines<A>(
 
         lineBytes += chunk.byteLength - lineStart
         if (lineBytes > maxLineBytes) {
+          const error = lineTooLarge(maxLineBytes, lineBytes)
           close = 'cancel'
-          yield left(lineTooLarge(maxLineBytes, lineBytes))
+          closeReason = error
+          yield left(error)
           return
         }
       }
@@ -605,6 +661,7 @@ async function* mapLines<A>(
       const decoded = decodeUtf8Chunk(decoder, chunk)
       if (decoded._tag === 'Left') {
         close = 'cancel'
+        closeReason = decoded.error
         yield decoded
         return
       }
@@ -617,9 +674,16 @@ async function* mapLines<A>(
       while (newline !== -1) {
         const mapped = map(stripTrailingCrString(carry.slice(start, newline)))
         if (mapped !== undefined) {
-          if (mapped._tag === 'Left') close = 'cancel'
+          if (mapped._tag === 'Left') {
+            yieldedError = mapped.error
+            if (!behavior.continueOnMappedLeft) {
+              close = 'cancel'
+              closeReason = mapped.error
+            }
+          }
           yield mapped
-          if (mapped._tag === 'Left') return
+          yieldedError = undefined
+          if (mapped._tag === 'Left' && !behavior.continueOnMappedLeft) return
         }
 
         start = newline + 1
@@ -632,6 +696,7 @@ async function* mapLines<A>(
     const tail = flushUtf8Decoder(decoder)
     if (tail._tag === 'Left') {
       close = 'cancel'
+      closeReason = tail.error
       yield tail
       return
     }
@@ -640,20 +705,45 @@ async function* mapLines<A>(
     if (carry.length > 0) {
       const mapped = map(stripTrailingCrString(carry))
       if (mapped !== undefined) {
-        if (mapped._tag === 'Left') close = 'cancel'
+        if (mapped._tag === 'Left') {
+          yieldedError = mapped.error
+          if (!behavior.continueOnMappedLeft) {
+            close = 'cancel'
+            closeReason = mapped.error
+          }
+        }
         yield mapped
-        if (mapped._tag === 'Left') return
+        yieldedError = undefined
+        if (mapped._tag === 'Left' && !behavior.continueOnMappedLeft) return
       }
     }
 
     const final = finish?.()
-    if (final !== undefined) yield final
+    if (final !== undefined) {
+      if (final._tag === 'Left') {
+        yieldedError = final.error
+        if (!behavior.continueOnMappedLeft) {
+          close = 'cancel'
+          closeReason = final.error
+        }
+      }
+      yield final
+      yieldedError = undefined
+      if (final._tag === 'Left' && !behavior.continueOnMappedLeft) return
+    }
+    completed = true
   } catch (cause) {
+    const error = streamReadError(cause)
     close = 'cancel'
-    yield left(streamReadError(cause))
+    closeReason = cause
+    yield left(error)
   } finally {
     stop.cleanup()
-    await closeIterator(iterator.value, close)
+    if (close === 'release' && !completed) {
+      close = 'cancel'
+      closeReason = yieldedError
+    }
+    await closeIterator(iterator.value, close, closeReason)
   }
 }
 
@@ -778,8 +868,8 @@ function readableIterator<T>(
 
   return {
     next: async () => reader.read(),
-    return: async () => {
-      await reader.cancel()
+    return: async (reason?: unknown) => {
+      await reader.cancel(reason)
       reader.releaseLock()
       return { value: undefined, done: true }
     },
@@ -882,13 +972,14 @@ function isStopError(value: unknown): value is Aborted | StreamError {
 
 async function closeIterator<T>(
   iterator: AsyncIterator<T>,
-  mode: 'cancel' | 'release',
+  mode: CloseMode,
+  reason?: unknown,
 ): Promise<void> {
   if (mode === 'release' && isReadableIterator(iterator)) {
     iterator.release()
     return
   }
-  await iterator.return?.()
+  await iterator.return?.(reason)
 }
 
 function isReadableIterator<T>(
@@ -937,6 +1028,12 @@ function streamReadError(cause: unknown): StreamReadError {
 
 function streamExternalError(cause: unknown): StreamExternalError {
   return { _tag: 'StreamExternalError', cause }
+}
+
+function cancelReasonFromError(error: Aborted | StreamError): unknown {
+  if (error._tag === 'Aborted') return error.reason
+  if (error._tag === 'StreamExternalError') return error.cause
+  return error
 }
 
 function streamConsumerError(cause: unknown): StreamConsumerError {
