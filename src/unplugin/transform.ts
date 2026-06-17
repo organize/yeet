@@ -59,13 +59,7 @@ const HELPER_IMPORTS = {
   right: 'right',
 } satisfies Record<HelperKey, string>
 const MAYBE_COMBINATOR = /\b(?:either|validate|firstOf|collect)\b/
-const PARSER_PLUGINS: ParserPlugin[] = [
-  'typescript',
-  'jsx',
-  'asyncGenerators',
-  'explicitResourceManagement',
-  'importAttributes',
-]
+const PARSER_PLUGINS: ParserPlugin[] = ['typescript', 'jsx']
 
 export function transformYeet(
   code: string,
