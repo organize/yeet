@@ -49,7 +49,16 @@ Inside async `either`, that signal also has `fork(task)`, `forkAll(tasks)`, and
 `forkRace(tasks)`. Use these for scoped child work; every task receives a child
 `ScopeSignal`. A forked child `Left`, a scoped `forkAll` failure, a scoped
 `forkRace` failure, a rejection, parent abort, or normal scope close aborts
-sibling work. These helpers are not root exports and are not for sync `either`.
+sibling work. When a `forkRace` `Right` wins, losers are aborted with
+`siblingSettled()` (`{ _tag: 'SiblingSettled' }`). These helpers are not root
+exports and are not for sync `either`.
+If sibling teardown rejects while a scope is already unwinding, the primary
+failure remains primary and cleanup rejections are attached as `Suppressed`
+Exit-error data. If a `forkRace` `Right` wins but a loser rejects during abort
+cleanup, the race returns `Left<Rejected>`.
+Inside scoped child tasks, do not return a custom `Left<Cancelled>` solely
+because `signal.aborted`; it widens the task error union and losers are
+discarded. Honor the signal and let yeet surface `Aborted` / `SiblingSettled`.
 
 ```ts
 const result = await either(async function* ({ signal }) {
@@ -124,12 +133,21 @@ Main stream APIs:
 
 `bytes`, `text`, `json`, `chunks`, `consume`, `collectText`, `lines`, `ndjson`,
 `sse`.
+Malformed NDJSON yields `Left<ParseError>` per bad line and continues if the
+consumer keeps iterating. Byte limits, line limits, invalid chunks, and decode
+failures are stream-fatal.
+Breaking a `chunks` / `lines` / `ndjson` / `sse` loop, or returning `Left` from
+`consume(..., { each })`, cancels the underlying `ReadableStream`. Known stop
+reasons are passed to `cancel(reason)`: abort `signal.reason`, external error
+cause, or the fatal stream error.
 
 ## Other helpers
 
 Use `capture` to treat a `Left` as data, `all` for concurrent tuple inputs,
 `collectAll` to partition concurrent inputs, `validate` to accumulate all
 errors, `firstOf` for first success, and `collect` to partition yielded values.
+Use `suppressed(error, failures)` only when manually constructing the scoped
+cleanup-failure shape yeet normally creates for you.
 
 Serialization helpers: `fromJSON`, `isSerializedEither`,
 `serializedEitherSchema`, `eitherSchema`, `exitErrorSchema`,

@@ -1,6 +1,6 @@
 # yeet
 
-> A tiny (~2.0 kB gzipped core; stream helpers on a separate ~2.7 kB subpath), zero-dependency `Either` / `Result` library for TypeScript. It models success and failure as ordinary values (`Right<A>` and `Left<E>`) and uses generator-based do-notation instead of a method-chaining API. You write normal control flow — `if`, `for`, early `return` — and TypeScript infers the error union from what you yield and raise. An optional build-time transform lowers the generators to plain branches for zero runtime overhead.
+> A tiny (~4.0 kB gzipped core; stream helpers on a separate ~2.9 kB subpath), zero-dependency `Either` / `Result` library for TypeScript. It models success and failure as ordinary values (`Right<A>` and `Left<E>`) and uses generator-based do-notation instead of a method-chaining API. You write normal control flow — `if`, `for`, early `return` — and TypeScript infers the error union from what you yield and raise. An optional build-time transform lowers the generators to plain branches for zero runtime overhead.
 
 `yeet` deliberately has no `map` / `flatMap` / `andThen` / `pipe` surface. The happy path reads top-to-bottom; errors flow through the type system. Package name on npm is `@big-time/yeet`. It is ESM-only and ships TypeScript declarations.
 
@@ -135,14 +135,22 @@ type ScopeSignal = AbortSignal & {
   ): Promise<Exit<ScopeTaskError<T[number]>, ScopeTaskValue<T[number]>>>
 }
 
-type Exit<E, A> = Either<E | Rejected | Aborted, A>
+type Exit<E, A> = Either<E | Rejected | Aborted | Suppressed, A>
 ```
 
 Use `signal.fork(task)`, `signal.forkAll(tasks)`, and `signal.forkRace(tasks)` inside
 async `either` for small structured-concurrency steps. Each task gets a child
 signal. A child `Left`, a scoped `forkAll`/`forkRace` failure, a rejection, a
 parent abort, or closing the outer generator aborts sibling work and waits for it to
-settle.
+settle. When a `forkRace` `Right` wins, losing tasks are aborted with
+`siblingSettled()` (`{ _tag: 'SiblingSettled' }`).
+If sibling teardown rejects while a scope is already unwinding, the primary
+failure remains primary and cleanup rejections are attached as `Suppressed`
+Exit-error data. If a `forkRace` `Right` wins but a loser rejects during abort
+cleanup, the race returns `Left<Rejected>`.
+Inside scoped child tasks, avoid returning a custom `Left<Cancelled>` solely
+because `signal.aborted`; it widens task error unions and losing tasks are
+discarded. Honor the signal and let yeet surface `Aborted` / `SiblingSettled`.
 
 ```ts
 const result = await either(async function* ({ signal }) {
@@ -164,7 +172,8 @@ referenced.
 Prefer `yield* await signal.forkAll([...])` for batches: it starts all child tasks,
 preserves tuple order, and cancels siblings on first failure. Prefer
 `yield* await signal.forkRace([...])` when the first child outcome wins; a winning
-`Right` aborts losers without poisoning the enclosing `either`.
+`Right` aborts losers with `SiblingSettled` without poisoning the enclosing
+`either`.
 
 ## streams and bytes
 
@@ -254,6 +263,13 @@ Cancellation is cooperative. Pass the same signal to `either(signal, ...)`, the
 stream helper, and the underlying I/O operation. The driver can stop advancing
 and close iterators, but it cannot interrupt a source that ignores the signal
 and never settles.
+Malformed NDJSON yields `Left<ParseError>` for that line and continues if the
+consumer keeps iterating. Byte limits, line limits, invalid chunks, and decode
+failures are stream-fatal.
+Breaking a `chunks` / `lines` / `ndjson` / `sse` loop, or returning `Left` from
+`consume(..., { each })`, cancels the underlying `ReadableStream`. Known stop
+reasons are passed to `cancel(reason)`: abort `signal.reason`, external error
+cause, or the fatal stream error.
 
 ## capture — get a Left as a value instead of short-circuiting
 
@@ -369,13 +385,13 @@ import { eitherSchema, serializedEitherSchema, exitSchema, serializedExitSchema 
 
 const Serialized = serializedEitherSchema({ error: ApiError, value: User }) // -> transport shape
 const Hydrated   = eitherSchema({ error: ApiError, value: User })           // -> real Left | Right
-const ExitJson   = serializedExitSchema({ error: ApiError, value: User })   // -> Left<ApiError | Aborted | Rejected> | Right<User>
+const ExitJson   = serializedExitSchema({ error: ApiError, value: User })   // -> Left<ApiError | Aborted | Rejected | Suppressed> | Right<User>
 const ExitValue  = exitSchema({ error: ApiError, value: User })             // -> hydrated Exit
 ```
 
 Nested schemas are optional; without them the outer `{ _tag, error | value }` envelope is validated and the payload stays `unknown`.
 For `Exit`, omitting the domain `error` schema accepts only yeet's built-in
-`Aborted` and `Rejected` error payloads.
+`Aborted`, `Rejected`, and `Suppressed` error payloads.
 
 ## Lower-level: fold / foldAsync
 
@@ -426,12 +442,12 @@ A call is lowered only when it is a direct `either(function* () { ... })` litera
 ```
 left right isLeft isRight
 either capture validate firstOf collect all collectAll
-ensure ensureNotNull raise
+ensure ensureNotNull raise siblingSettled suppressed
 fromJSON isSerializedEither serializedEitherSchema eitherSchema
 exitErrorSchema serializedExitSchema exitSchema
 fold foldAsync
 stream subpath: bytes text json chunks consume collectText lines ndjson sse
-types: Either, Left, Right, Rejected, Aborted, Check, Raise, Strategy, Step,
+types: Either, Left, Right, Rejected, Aborted, SiblingSettled, Suppressed, Check, Raise, Strategy, Step,
        SerializedEither, SerializedLeft, SerializedRight, Collected, InferE, InferA,
        StreamError, StreamReadError, StreamExternalError, StreamConsumerError,
        StreamTooLarge, TextTooLarge, LineTooLarge, InvalidChunk, DecodeError,
