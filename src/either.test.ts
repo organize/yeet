@@ -53,6 +53,92 @@ const numberSchema = {
 } satisfies StandardSchemaV1<unknown, number> &
   StandardJSONSchemaV1<unknown, number>
 
+type SensorTimeout = {
+  readonly _tag: 'SensorTimeout'
+  readonly sensor: string
+  readonly deadlineMs: number
+}
+
+const sensorTimeoutSchema = {
+  '~standard': {
+    version: 1,
+    vendor: 'test',
+    validate(value: unknown) {
+      return value !== null &&
+        typeof value === 'object' &&
+        (value as Record<string, unknown>)['_tag'] === 'SensorTimeout' &&
+        typeof (value as Record<string, unknown>)['sensor'] === 'string' &&
+        typeof (value as Record<string, unknown>)['deadlineMs'] === 'number'
+        ? { value: value as SensorTimeout }
+        : { issues: [{ message: 'Expected SensorTimeout' }] }
+    },
+    jsonSchema: {
+      input: () => ({
+        type: 'object',
+        properties: {
+          _tag: { enum: ['SensorTimeout'] },
+          sensor: { type: 'string' },
+          deadlineMs: { type: 'number' },
+        },
+        required: ['_tag', 'sensor', 'deadlineMs'],
+        additionalProperties: false,
+      }),
+      output: () => ({
+        type: 'object',
+        properties: {
+          _tag: { enum: ['SensorTimeout'] },
+          sensor: { type: 'string' },
+          deadlineMs: { type: 'number' },
+        },
+        required: ['_tag', 'sensor', 'deadlineMs'],
+        additionalProperties: false,
+      }),
+    },
+  },
+} satisfies StandardSchemaV1<unknown, SensorTimeout> &
+  StandardJSONSchemaV1<unknown, SensorTimeout>
+
+type AbortReason = {
+  readonly _tag: 'Deadline'
+  readonly operation: string
+}
+
+const abortReasonSchema = {
+  '~standard': {
+    version: 1,
+    vendor: 'test',
+    validate(value: unknown) {
+      return value !== null &&
+        typeof value === 'object' &&
+        (value as Record<string, unknown>)['_tag'] === 'Deadline' &&
+        typeof (value as Record<string, unknown>)['operation'] === 'string'
+        ? { value: value as AbortReason }
+        : { issues: [{ message: 'Expected Deadline' }] }
+    },
+    jsonSchema: {
+      input: () => ({
+        type: 'object',
+        properties: {
+          _tag: { enum: ['Deadline'] },
+          operation: { type: 'string' },
+        },
+        required: ['_tag', 'operation'],
+        additionalProperties: false,
+      }),
+      output: () => ({
+        type: 'object',
+        properties: {
+          _tag: { enum: ['Deadline'] },
+          operation: { type: 'string' },
+        },
+        required: ['_tag', 'operation'],
+        additionalProperties: false,
+      }),
+    },
+  },
+} satisfies StandardSchemaV1<unknown, AbortReason> &
+  StandardJSONSchemaV1<unknown, AbortReason>
+
 const stringToNumberSchema = {
   '~standard': {
     version: 1,
@@ -418,6 +504,62 @@ describe('serialization schemas', () => {
     expect(result.value._tag).toBe('Left')
     if (result.value._tag === 'Left')
       expect(result.value.error).toBe('DomainError')
+  })
+
+  it('round-trips typed Exit errors into branchable hydrated Lefts', async () => {
+    const serialized = serializedExitSchema({
+      error: sensorTimeoutSchema,
+      reason: abortReasonSchema,
+      value: stringSchema,
+    })
+    const hydrated = exitSchema({
+      error: sensorTimeoutSchema,
+      reason: abortReasonSchema,
+      value: stringSchema,
+    })
+
+    const domainJson = {
+      _tag: 'Left',
+      error: {
+        _tag: 'SensorTimeout',
+        sensor: 'imu-7',
+        deadlineMs: 250,
+      },
+    }
+    const abortJson = {
+      _tag: 'Left',
+      error: {
+        _tag: 'Aborted',
+        reason: { _tag: 'Deadline', operation: 'scan' },
+      },
+    }
+
+    expect(await serialized['~standard'].validate(domainJson)).toEqual({
+      value: domainJson,
+    })
+
+    const domain = await hydrated['~standard'].validate(domainJson)
+    const aborted = await hydrated['~standard'].validate(abortJson)
+
+    expect(domain.issues).toBeUndefined()
+    expect(aborted.issues).toBeUndefined()
+    if (domain.issues !== undefined || aborted.issues !== undefined) return
+
+    expect(isLeft(domain.value)).toBe(true)
+    expect(isLeft(aborted.value)).toBe(true)
+    if (domain.value._tag === 'Left') {
+      expect(domain.value.error._tag).toBe('SensorTimeout')
+      if (domain.value.error._tag === 'SensorTimeout')
+        expect(domain.value.error.sensor).toBe('imu-7')
+    }
+    if (aborted.value._tag === 'Left') {
+      expect(aborted.value.error._tag).toBe('Aborted')
+      if (aborted.value.error._tag === 'Aborted')
+        expect(aborted.value.error.reason).toEqual({
+          _tag: 'Deadline',
+          operation: 'scan',
+        })
+    }
   })
 
   it('validates nested Exit reason and cause schemas', async () => {

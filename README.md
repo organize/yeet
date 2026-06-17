@@ -290,10 +290,10 @@ type ScopeSignal = AbortSignal & {
   fork<E, A>(
     task: (signal: ScopeSignal) => Either<E, A> | PromiseLike<Either<E, A>>,
   ): Promise<Exit<E, A>>
-  all<const T extends readonly ScopeTask<any, any>[]>(
+  forkAll<const T extends readonly ScopeTask<any, any>[]>(
     tasks: T,
   ): Promise<Exit<ScopeTaskError<T[number]>, ScopeTaskValues<T>>>
-  race<const T extends readonly ScopeTask<any, any>[]>(
+  forkRace<const T extends readonly ScopeTask<any, any>[]>(
     tasks: T,
   ): Promise<Exit<ScopeTaskError<T[number]>, ScopeTaskValue<T[number]>>>
 }
@@ -362,13 +362,13 @@ care about, as above. TypeScript cannot see the error type of a detached fork
 that is started and never referenced again; JavaScript may be magical, but it is
 not yet clairvoyant.
 
-When the work is naturally a batch, use `signal.all`. It starts every task with
-a child signal, returns values in input order, and cancels siblings on the first
-`Left` or rejection.
+When the work is naturally a batch, use `signal.forkAll`. It starts every task
+with a child signal, returns values in input order, and cancels siblings on the
+first `Left` or rejection.
 
 ```ts
 const result = await either(async function* ({ signal }) {
-  const [user, settings] = yield* await signal.all([
+  const [user, settings] = yield* await signal.forkAll([
     (signal) => fetchUser(id, signal),
     (signal) => fetchSettings(id, signal),
   ] as const)
@@ -380,13 +380,13 @@ const result = await either(async function* ({ signal }) {
 // Promise<Either<Aborted | Rejected | FetchUserError | FetchSettingsError, { user: User; settings: Settings }>>
 ```
 
-Use `signal.race` when the first typed outcome wins. A winning `Right` aborts
-the losers without poisoning the enclosing `either`; a winning `Left` aborts the
-losers and short-circuits as usual.
+Use `signal.forkRace` when the first typed outcome wins. A winning `Right`
+aborts the losers without poisoning the enclosing `either`; a winning `Left`
+aborts the losers and short-circuits as usual.
 
 ```ts
 const result = await either(async function* ({ signal }) {
-  const profile = yield* await signal.race([
+  const profile = yield* await signal.forkRace([
     (signal) => fetchFromEdgeCache(id, signal),
     (signal) => fetchFromOrigin(id, signal),
   ] as const)
@@ -1158,13 +1158,13 @@ the keys to the old truck.
 
 ### Concurrency
 
-| API                  | Description                                                          |
-| -------------------- | -------------------------------------------------------------------- |
-| `all(inputs)`        | Run independent inputs concurrently and short-circuit by input order |
-| `collectAll(inputs)` | Run independent inputs concurrently and partition all outcomes       |
-| `signal.fork(task)`  | Start child work inside the current async `either` scope             |
-| `signal.all(tasks)`  | Run signal-aware child tasks and cancel siblings on first failure    |
-| `signal.race(tasks)` | Return the first child outcome and abort losing tasks                |
+| API                      | Description                                                          |
+| ------------------------ | -------------------------------------------------------------------- |
+| `all(inputs)`            | Run independent inputs concurrently and short-circuit by input order |
+| `collectAll(inputs)`     | Run independent inputs concurrently and partition all outcomes       |
+| `signal.fork(task)`      | Start child work inside the current async `either` scope             |
+| `signal.forkAll(tasks)`  | Run signal-aware child tasks and cancel siblings on first failure    |
+| `signal.forkRace(tasks)` | Return the first child outcome and abort losing tasks                |
 
 ### Guards And Async Helpers
 

@@ -88,6 +88,7 @@ type ScopeRuntime = {
   readonly failure: Promise<Left<any>>
   readonly signal: ScopeSignal
   readonly enableFork: () => void
+  readonly abort: (reason?: unknown) => void
   readonly close: () => Promise<void>
   readonly fail: (failure: Left<any>, reason?: unknown) => void
   readonly currentFailure: () => Left<any> | undefined
@@ -96,12 +97,6 @@ type ScopeRuntime = {
 type ScopedTaskHandle<E, A> = {
   readonly promise: Promise<Exit<E, A>>
   readonly abort: (reason?: unknown) => void
-}
-
-type ChildScopeSignal = {
-  readonly signal: ScopeSignal
-  readonly abort: (reason?: unknown) => void
-  readonly cleanup: () => void
 }
 
 type ScopeSource = ScopeRuntime | RaiseContextHandle
@@ -149,17 +144,17 @@ function createScopeRuntime(parent?: AbortSignal): ScopeRuntime {
       // oxlint-disable-next-line typescript/promise-function-async
       value: <E, A>(task: ScopeTask<E, A>) => forkScopedTask(scope, task),
     },
-    all: {
+    forkAll: {
       configurable: true,
       // oxlint-disable-next-line typescript/promise-function-async
       value: <const T extends readonly ScopeTask<any, any>[]>(tasks: T) =>
-        allScopedTasks(scope, tasks),
+        forkAllScopedTasks(scope, tasks),
     },
-    race: {
+    forkRace: {
       configurable: true,
       // oxlint-disable-next-line typescript/promise-function-async
       value: <const T extends readonly ScopeTask<any, any>[]>(tasks: T) =>
-        raceScopedTasks(scope, tasks),
+        forkRaceScopedTasks(scope, tasks),
     },
   })
 
@@ -169,12 +164,15 @@ function createScopeRuntime(parent?: AbortSignal): ScopeRuntime {
     enableFork() {
       forkEnabled = true
     },
+    abort(reason?: unknown) {
+      if (!controller.signal.aborted) controller.abort(reason)
+    },
     close: async () => {
       if (closed) return
       closed = true
       closing = true
       parentCleanup?.()
-      if (!controller.signal.aborted) {
+      if (children.size > 0 && !controller.signal.aborted) {
         controller.abort(new DOMException('Scope closed', 'AbortError'))
       }
       if (children.size > 0) await Promise.allSettled(children)
@@ -202,11 +200,11 @@ function createScopeRuntime(parent?: AbortSignal): ScopeRuntime {
   }
 
   // oxlint-disable-next-line typescript/promise-function-async
-  function allScopedTasks<const T extends readonly ScopeTask<any, any>[]>(
+  function forkAllScopedTasks<const T extends readonly ScopeTask<any, any>[]>(
     owner: ScopeRuntime,
     tasks: T,
   ): Promise<Exit<any, any[]>> {
-    ensureForkEnabled('all')
+    ensureForkEnabled('forkAll')
 
     const existing = failure
     if (existing !== undefined) return Promise.resolve(existing)
@@ -253,17 +251,17 @@ function createScopeRuntime(parent?: AbortSignal): ScopeRuntime {
   }
 
   // oxlint-disable-next-line typescript/promise-function-async
-  function raceScopedTasks<const T extends readonly ScopeTask<any, any>[]>(
+  function forkRaceScopedTasks<const T extends readonly ScopeTask<any, any>[]>(
     owner: ScopeRuntime,
     tasks: T,
   ): Promise<Exit<any, any>> {
-    ensureForkEnabled('race')
+    ensureForkEnabled('forkRace')
 
     const existing = failure
     if (existing !== undefined) return Promise.resolve(existing)
     if (tasks.length === 0) {
       const result = toRejectedLeft(
-        new TypeError('signal.race() requires at least one task'),
+        new TypeError('signal.forkRace() requires at least one task'),
       )
       owner.fail(result)
       return Promise.resolve(result)
@@ -311,30 +309,41 @@ function createScopeRuntime(parent?: AbortSignal): ScopeRuntime {
       }
     }
 
-    const child = createChildScopeSignal(owner.signal)
-    const childPromise = Promise.try(() => task(child.signal))
-      .then((result) => result as Exit<E, A>)
+    const childScope = createScopeRuntime(owner.signal)
+    childScope.enableFork()
+    const existing = childScope.currentFailure()
+    if (existing !== undefined) {
+      return {
+        promise: Promise.resolve(existing as Exit<E, A>),
+        abort: childScope.abort,
+      }
+    }
+
+    const childPromise = Promise.try(() => task(childScope.signal))
+      .then((result) => (childScope.currentFailure() ?? result) as Exit<E, A>)
       .catch((cause) => toRejectedLeft(cause) as Exit<E, A>)
+      .then(async (result) => {
+        await childScope.close()
+        return result
+      })
 
     children.add(childPromise)
     void childPromise.then(
       () => {
         children.delete(childPromise)
-        child.cleanup()
       },
       () => {
         children.delete(childPromise)
-        child.cleanup()
       },
     )
 
     return {
       promise: childPromise,
-      abort: child.abort,
+      abort: childScope.abort,
     }
   }
 
-  function ensureForkEnabled(method: 'fork' | 'all' | 'race'): void {
+  function ensureForkEnabled(method: 'fork' | 'forkAll' | 'forkRace'): void {
     if (!forkEnabled) {
       throw new TypeError(
         `signal.${method}() is only available in async either`,
@@ -352,46 +361,6 @@ function abortScopedTasks(
 ): void {
   for (let index = 0; index < handles.length; index++) {
     if (index !== except) handles[index]?.abort(reason)
-  }
-}
-
-function createChildScopeSignal(parent: ScopeSignal): ChildScopeSignal {
-  const controller = new AbortController()
-  let parentCleanup: (() => void) | undefined
-
-  const onParentAbort = (): void => {
-    controller.abort(parent.reason)
-  }
-
-  if (parent.aborted) controller.abort(parent.reason)
-  else {
-    parent.addEventListener('abort', onParentAbort, { once: true })
-    parentCleanup = () => parent.removeEventListener('abort', onParentAbort)
-  }
-
-  const signal = controller.signal as ScopeSignal
-  Object.defineProperties(signal, {
-    fork: {
-      configurable: true,
-      value: parent.fork.bind(parent),
-    },
-    all: {
-      configurable: true,
-      value: parent.all.bind(parent),
-    },
-    race: {
-      configurable: true,
-      value: parent.race.bind(parent),
-    },
-  })
-  return {
-    signal,
-    abort(reason?: unknown) {
-      if (!controller.signal.aborted) controller.abort(reason)
-    },
-    cleanup() {
-      parentCleanup?.()
-    },
   }
 }
 

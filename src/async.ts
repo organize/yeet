@@ -145,7 +145,7 @@ export type ScopeTaskError<T> = InferE<AwaitedScopeTask<T>>
 /** Extracts the success value type from a scoped task. */
 export type ScopeTaskValue<T> = InferA<AwaitedScopeTask<T>>
 
-/** Tuple of success values produced by {@link ScopeSignal.all}. */
+/** Tuple of success values produced by {@link ScopeSignal.forkAll}. */
 export type ScopeTaskValues<T extends readonly ScopeTask<any, any>[]> = {
   -readonly [K in keyof T]: ScopeTaskValue<T[K]>
 }
@@ -161,10 +161,10 @@ export type ScopeSignal = AbortSignal & {
     task: (signal: ScopeSignal) => Left<E> | PromiseLike<Left<E>>,
   ): Promise<Exit<E, never>>
   fork<E, A>(task: ScopeTask<E, A>): Promise<Exit<E, A>>
-  all<const T extends readonly ScopeTask<any, any>[]>(
+  forkAll<const T extends readonly ScopeTask<any, any>[]>(
     tasks: T,
   ): Promise<Exit<ScopeTaskError<T[number]>, ScopeTaskValues<T>>>
-  race<const T extends readonly ScopeTask<any, any>[]>(
+  forkRace<const T extends readonly ScopeTask<any, any>[]>(
     tasks: T,
   ): Promise<Exit<ScopeTaskError<T[number]>, ScopeTaskValue<T[number]>>>
 }
