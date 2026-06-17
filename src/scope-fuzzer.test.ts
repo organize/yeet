@@ -4,7 +4,7 @@ import { type Rejected, type ScopeSignal, type ScopeTask } from './async.ts'
 import { either } from './combinators.ts'
 import { type Either, left, right } from './either.ts'
 
-type Mode = 'fork' | 'all' | 'race'
+type Mode = 'fork' | 'forkAll' | 'forkRace'
 
 type FuzzError =
   | { readonly _tag: 'TaskFailed'; readonly id: number }
@@ -64,7 +64,7 @@ type FuzzTask = {
 }
 
 describe('scoped signal fuzzer', () => {
-  it('fuzzes fork/all/race settlement and abort interleavings', async () => {
+  it('fuzzes fork/forkAll/forkRace settlement and abort interleavings', async () => {
     for (let seed = 1; seed <= 180; seed++) {
       const scenario = createScenario(seed)
       try {
@@ -124,14 +124,14 @@ async function* runScopedMode(
 ): AsyncGenerator<Either<unknown, unknown>, unknown> {
   const scopedTasks = tasks.map((task) => task.task)
 
-  if (mode === 'race') {
-    const value = yield* await signal.race(scopedTasks)
+  if (mode === 'forkRace') {
+    const value = yield* await signal.forkRace(scopedTasks)
     const after = yield* right('after' as const)
     return { mode, value, after }
   }
 
-  if (mode === 'all') {
-    const values = yield* await signal.all(scopedTasks)
+  if (mode === 'forkAll') {
+    const values = yield* await signal.forkAll(scopedTasks)
     return { mode, values }
   }
 
@@ -242,10 +242,10 @@ function computeExpected(
     pending.delete(task.id)
 
     if (operation.kind === 'right') {
-      if (scenario.mode === 'race') {
+      if (scenario.mode === 'forkRace') {
         return {
           _tag: 'Right',
-          value: { mode: 'race', value: task.value, after: 'after' },
+          value: { mode: 'forkRace', value: task.value, after: 'after' },
           abortIds: new Set(pending),
           terminalIndex: index,
         }
@@ -316,7 +316,7 @@ function assertTaskInvariants(
 
 function createScenario(seed: number): Scenario {
   const random = mulberry32(seed)
-  const mode = pick(random, ['fork', 'all', 'race'] as const)
+  const mode = pick(random, ['fork', 'forkAll', 'forkRace'] as const)
   const taskCount = 1 + randomInt(random, 5)
   const ids = shuffled(
     random,

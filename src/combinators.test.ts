@@ -384,12 +384,12 @@ describe('either scoped signal', () => {
     expect(events).toEqual(['slow:start', 'fail', 'slow:aborted'])
   })
 
-  it('runs signal.all concurrently and preserves tuple order', async () => {
+  it('runs signal.forkAll concurrently and preserves tuple order', async () => {
     const first = deferred<Either<'FirstFailed', number>>()
     const second = deferred<Either<'SecondFailed', string>>()
 
     const resultPromise = either(async function* ({ signal }) {
-      return yield* await signal.all([
+      return yield* await signal.forkAll([
         async () => first.promise,
         async () => second.promise,
       ] as const)
@@ -405,11 +405,11 @@ describe('either scoped signal', () => {
     expectRight(await resultPromise, [1, 'two'])
   })
 
-  it('cancels sibling tasks when signal.all sees a Left', async () => {
+  it('cancels sibling tasks when signal.forkAll sees a Left', async () => {
     const events: string[] = []
 
     const result = await either(async function* ({ signal }) {
-      return yield* await signal.all([
+      return yield* await signal.forkAll([
         async (child) => {
           events.push('slow:start')
           const result = await abortAsLeft(child, 'SlowAborted' as const)
@@ -427,11 +427,11 @@ describe('either scoped signal', () => {
     expect(events).toEqual(['slow:start', 'fail', 'slow:aborted'])
   })
 
-  it('lets signal.race return the first Right without poisoning the scope', async () => {
+  it('lets signal.forkRace return the first Right without poisoning the scope', async () => {
     const events: string[] = []
 
     const result = await either(async function* ({ signal }) {
-      const raced = yield* await signal.race([
+      const raced = yield* await signal.forkRace([
         async (child) => {
           events.push('slow:start')
           const result = await abortAsLeft(child, 'SlowAborted' as const)
@@ -453,11 +453,11 @@ describe('either scoped signal', () => {
     expect(events).toEqual(['slow:start', 'fast', 'slow:aborted'])
   })
 
-  it('lets signal.race return the first Left and cancel losers', async () => {
+  it('lets signal.forkRace return the first Left and cancel losers', async () => {
     const events: string[] = []
 
     const result = await either(async function* ({ signal }) {
-      return yield* await signal.race([
+      return yield* await signal.forkRace([
         async (child) => {
           events.push('slow:start')
           const result = await abortAsLeft(child, 'SlowAborted' as const)
@@ -476,9 +476,9 @@ describe('either scoped signal', () => {
     expect(events).toEqual(['slow:start', 'fail', 'slow:aborted'])
   })
 
-  it('returns Rejected for an empty signal.race', async () => {
+  it('returns Rejected for an empty signal.forkRace', async () => {
     const result = await either(async function* ({ signal }) {
-      yield* await signal.race([] as const)
+      yield* await signal.forkRace([] as const)
       return 'done' as const
     })
 
@@ -488,8 +488,82 @@ describe('either scoped signal', () => {
     expect(error._tag).toBe('Rejected')
     expect(error.cause).toBeInstanceOf(TypeError)
     expect((error.cause as Error).message).toBe(
-      'signal.race() requires at least one task',
+      'signal.forkRace() requires at least one task',
     )
+  })
+
+  it('recursively aborts forks created inside forked tasks', async () => {
+    const events: string[] = []
+
+    const result = await either(async function* ({ signal }) {
+      const parent = signal.fork(async (child) => {
+        events.push('parent:start')
+
+        void child.fork(async (grandchild) => {
+          events.push('grandchild:start')
+          const result = await abortAsLeft(
+            grandchild,
+            'GrandchildAborted' as const,
+          )
+          events.push('grandchild:aborted')
+          return result
+        })
+
+        return left('ParentFailed' as const)
+      })
+
+      yield* await parent
+      return 'done' as const
+    })
+
+    expectLeft(result as Either<unknown, unknown>, 'ParentFailed')
+    expect(events).toEqual([
+      'parent:start',
+      'grandchild:start',
+      'grandchild:aborted',
+    ])
+  })
+
+  it('does not start forked work when the scope is already aborted', async () => {
+    const controller = new AbortController()
+    controller.abort('AlreadyDone')
+    let started = false
+
+    const result = await either(
+      controller.signal,
+      async function* ({ signal }) {
+        const child = signal.fork(() => {
+          started = true
+          return right('started' as const)
+        })
+
+        return yield* await child
+      },
+    )
+
+    expect(started).toBe(false)
+    expectLeft(result, { _tag: 'Aborted', reason: 'AlreadyDone' })
+  })
+
+  it('does not start forked work after the running scope aborts', async () => {
+    const controller = new AbortController()
+    let started = false
+
+    const result = await either(
+      controller.signal,
+      async function* ({ signal }) {
+        controller.abort('Stopped')
+        const child = signal.fork(() => {
+          started = true
+          return right('started' as const)
+        })
+
+        return yield* await child
+      },
+    )
+
+    expect(started).toBe(false)
+    expectLeft(result, { _tag: 'Aborted', reason: 'Stopped' })
   })
 
   it('captures rejected forked tasks and cancels siblings', async () => {
@@ -594,20 +668,20 @@ describe('either scoped signal', () => {
     ).toThrow('signal.fork() is only available in async either')
   })
 
-  it('does not enable signal.all or signal.race inside sync either', () => {
+  it('does not enable signal.forkAll or signal.forkRace inside sync either', () => {
     expect(() =>
       either(function* ({ signal }) {
-        void signal.all([])
+        void signal.forkAll([])
         return yield* right(1)
       }),
-    ).toThrow('signal.all() is only available in async either')
+    ).toThrow('signal.forkAll() is only available in async either')
 
     expect(() =>
       either(function* ({ signal }) {
-        void signal.race([])
+        void signal.forkRace([])
         return yield* right(1)
       }),
-    ).toThrow('signal.race() is only available in async either')
+    ).toThrow('signal.forkRace() is only available in async either')
   })
 })
 
