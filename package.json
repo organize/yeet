@@ -81,9 +81,13 @@
     }
   },
   "scripts": {
-    "bench": "vitest bench --run && bun run scripts/bench-to-csv.ts",
+    "bench": "bun run scripts/bench.ts",
+    "bench:bun": "bun run scripts/bench.ts --target bun",
     "bench:memory": "bun run scripts/memory-bench.ts",
-    "bench:quick": "BENCH_TIME_MS=1000 BENCH_WARMUP_TIME_MS=300 BENCH_WARMUP_ITERATIONS=20 vitest bench --run && bun run scripts/bench-to-csv.ts",
+    "bench:node": "bun run scripts/bench.ts --target node",
+    "bench:quick": "bun run scripts/bench.ts --quick",
+    "bench:quick:bun": "bun run scripts/bench.ts --target bun --quick",
+    "bench:quick:node": "bun run scripts/bench.ts --target node --quick",
     "build": "tsdown",
     "check": "tsc --noEmit",
     "dev": "bun run src/index.ts",

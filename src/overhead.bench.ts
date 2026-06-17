@@ -1,6 +1,7 @@
 import { Result } from 'better-result'
 import { afterAll, bench, describe } from 'vitest'
 
+import { cleanupBenchFixtures, importBenchFixture } from './bench-fixture.ts'
 import { BENCH_OPTS } from './bench-options.ts'
 import { either } from './combinators.ts'
 import { left, right, type Either } from './either.ts'
@@ -502,8 +503,9 @@ const loweredModule = await importBenchModule(
 )
 const benchSink = { value: undefined as unknown }
 
-afterAll(() => {
+afterAll(async () => {
   void benchSink.value
+  await cleanupBenchFixtures()
 })
 
 benchFamily('overhead: sync single success', 'singleSuccess')
@@ -1330,14 +1332,10 @@ function indexer(): () => number {
   return () => index++
 }
 
-function moduleUrl(code: string): string {
-  return `data:text/javascript;base64,${Buffer.from(code).toString('base64')}`
-}
-
 async function importBenchModule(
   code: string,
 ): Promise<BenchModule & StreamBenchModule> {
-  return (await import(moduleUrl(code))) as BenchModule & StreamBenchModule
+  return importBenchFixture<BenchModule & StreamBenchModule>(code, 'overhead')
 }
 
 async function transformWithPlugin(code: string): Promise<string> {
