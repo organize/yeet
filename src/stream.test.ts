@@ -74,6 +74,45 @@ function expectLeftTag(result: Either<unknown, unknown>, tag: string): void {
   if (result._tag === 'Left') expect(hasTag(result.error, tag)).toBe(true)
 }
 
+function trackedByteStream(parts: readonly string[]): {
+  readonly stream: ReadableStream<Uint8Array>
+  readonly state: {
+    pulls: number
+    enqueued: number
+    cancelled: boolean
+    cancelReason: unknown
+  }
+} {
+  const state = {
+    pulls: 0,
+    enqueued: 0,
+    cancelled: false,
+    cancelReason: undefined as unknown,
+  }
+  let index = 0
+
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      state.pulls++
+      const part = parts[index]
+      index++
+      if (part === undefined) {
+        controller.close()
+        return
+      }
+
+      controller.enqueue(encode(part))
+      state.enqueued++
+    },
+    cancel(reason) {
+      state.cancelled = true
+      state.cancelReason = reason
+    },
+  })
+
+  return { stream, state }
+}
+
 describe('bytes', () => {
   it('returns direct Uint8Array input without copying', async () => {
     const input = new Uint8Array([1, 2, 3])
@@ -216,10 +255,12 @@ describe('chunks', () => {
   it('cancels a pending ReadableStream read on abort', async () => {
     const controller = new AbortController()
     let canceled = false
+    let cancelReason: unknown
 
     const stream = new ReadableStream<Uint8Array>({
-      cancel() {
+      cancel(reason) {
         canceled = true
+        cancelReason = reason
       },
     })
 
@@ -241,6 +282,7 @@ describe('chunks', () => {
       }
     }
     expect(canceled).toBe(true)
+    expect(cancelReason).toBe('stop')
   })
 })
 
@@ -487,6 +529,117 @@ describe('lines and structured streams', () => {
     expect(result[0]?._tag).toBe('Left')
     if (result[0]?._tag === 'Left')
       expect(result[0].error._tag).toBe('ParseError')
+  })
+
+  it('continues after malformed ndjson lines when the consumer keeps going', async () => {
+    const { stream, state } = trackedByteStream([
+      '{"a":1}\n',
+      '{ nope\n',
+      '{"b":2}\n',
+    ])
+
+    const result = await collectEither(ndjson(stream))
+
+    expect(result).toHaveLength(3)
+    expect(result[0]).toEqual(right({ a: 1 }))
+    expect(result[1]?._tag).toBe('Left')
+    if (result[1]?._tag === 'Left')
+      expect(result[1].error._tag).toBe('ParseError')
+    expect(result[2]).toEqual(right({ b: 2 }))
+    expect(state.cancelled).toBe(false)
+  })
+
+  it('cancels the source when a consumer breaks an ndjson loop early', async () => {
+    const { stream, state } = trackedByteStream([
+      '{"seq":0}\n',
+      '{"seq":1}\n',
+      '{"seq":2}\n',
+      '{"seq":3}\n',
+    ])
+    let seen = 0
+
+    for await (const item of ndjson(stream)) {
+      expect(item._tag).toBe('Right')
+      seen++
+      if (seen === 2) break
+    }
+
+    expect(seen).toBe(2)
+    expect(state.cancelled).toBe(true)
+  })
+
+  it('cancels the source with a fatal line-size reason', async () => {
+    const { stream, state } = trackedByteStream([
+      '{"seq":0}\n',
+      `${JSON.stringify({ blob: 'x'.repeat(64) })}\n`,
+      '{"seq":1}\n',
+    ])
+
+    const result = await collectEither(ndjson(stream, { maxLineBytes: 16 }))
+
+    expect(result[0]).toEqual(right({ seq: 0 }))
+    expect(result[1]?._tag).toBe('Left')
+    if (result[1]?._tag === 'Left')
+      expect(result[1].error._tag).toBe('LineTooLarge')
+    expect(state.cancelled).toBe(true)
+    expect(hasTag(state.cancelReason, 'LineTooLarge')).toBe(true)
+  })
+
+  it('cancels the source with the external error reason', async () => {
+    const external = { _tag: 'ClientGone' as const }
+    const state = {
+      cancelled: false,
+      cancelReason: undefined as unknown,
+    }
+    const stream = new ReadableStream<Uint8Array>({
+      pull() {},
+      cancel(reason) {
+        state.cancelled = true
+        state.cancelReason = reason
+      },
+    })
+
+    const result = await collectEither(
+      ndjson(stream, { error: Promise.resolve(external) }),
+    )
+
+    expect(result[0]?._tag).toBe('Left')
+    if (result[0]?._tag === 'Left')
+      expect(result[0].error).toEqual({
+        _tag: 'StreamExternalError',
+        cause: external,
+      })
+    expect(state.cancelled).toBe(true)
+    expect(state.cancelReason).toBe(external)
+  })
+
+  it('cancels the source when consume short-circuits an ndjson stream', async () => {
+    const { stream, state } = trackedByteStream([
+      '{"seq":0,"t":"tick"}\n',
+      '{"seq":1,"t":"POISON"}\n',
+      '{"seq":2,"t":"tick"}\n',
+    ])
+    let processed = 0
+
+    const result = await consume(ndjson(stream), {
+      each(frame) {
+        if (
+          frame !== null &&
+          typeof frame === 'object' &&
+          (frame as { readonly t?: unknown }).t === 'POISON'
+        ) {
+          return left({ _tag: 'PoisonFrame' as const, at: processed })
+        }
+        processed++
+        return undefined
+      },
+    })
+
+    expect(result._tag).toBe('Left')
+    if (result._tag === 'Left')
+      expect(result.error).toEqual({ _tag: 'PoisonFrame', at: 1 })
+    expect(processed).toBe(1)
+    expect(state.cancelled).toBe(true)
   })
 
   it('parses server-sent events', async () => {

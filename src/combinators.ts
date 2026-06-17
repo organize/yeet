@@ -7,7 +7,10 @@ import {
   type ScopeSignal,
   type ScopeTask,
   aborted,
+  rejected,
   raise,
+  siblingSettled,
+  suppressed,
   toRejectedLeft,
 } from './async.ts'
 import {
@@ -52,6 +55,7 @@ async function eitherAsync<Eff extends Either<any, any>, Ret>(
   gen: AsyncGenerator<Eff, Ret, unknown>,
   scope?: ScopeSource,
 ): Promise<Either<any, any>> {
+  let result: Either<any, any> | undefined
   try {
     let value: unknown
     let hasValue = false
@@ -61,22 +65,35 @@ async function eitherAsync<Eff extends Either<any, any>, Ret>(
       const next = step.result
       if (isScopeFailure(next)) {
         await closeAsyncGenerator(gen, step.pending)
-        return next
+        result = next
+        break
       }
 
-      if (next.done) return finishEither(next.value)
+      if (next.done) {
+        result = finishEither(next.value)
+        break
+      }
 
       const eff = next.value
       if (eff._tag === 'Left') {
         await closeAsyncGenerator(gen)
-        return eff
+        result = eff
+        break
       }
       value = eff.value
       hasValue = true
     }
   } finally {
-    await closeScope(scope)
+    const closeFailure = await closeScope(scope)
+    if (closeFailure !== undefined && closeFailure !== result) {
+      result =
+        result?._tag === 'Left'
+          ? withSuppressed(result, cleanupFailuresFromLeft(closeFailure))
+          : closeFailure
+    }
   }
+
+  return result
 }
 
 type ScopeStep<Eff, Ret> = {
@@ -89,7 +106,7 @@ type ScopeRuntime = {
   readonly signal: ScopeSignal
   readonly enableFork: () => void
   readonly abort: (reason?: unknown) => void
-  readonly close: () => Promise<void>
+  readonly close: () => Promise<Left<any> | undefined>
   readonly fail: (failure: Left<any>, reason?: unknown) => void
   readonly currentFailure: () => Left<any> | undefined
 }
@@ -112,6 +129,7 @@ function createScopeRuntime(parent?: AbortSignal): ScopeRuntime {
   const controller = new AbortController()
   const { promise, resolve } = Promise.withResolvers<Left<any>>()
   const children = new Set<Promise<Either<any, any>>>()
+  const lateCleanupFailures: Rejected[] = []
   let failure: Left<any> | undefined
   let closed = false
   let closing = false
@@ -175,7 +193,17 @@ function createScopeRuntime(parent?: AbortSignal): ScopeRuntime {
       if (children.size > 0 && !controller.signal.aborted) {
         controller.abort(new DOMException('Scope closed', 'AbortError'))
       }
-      if (children.size > 0) await Promise.allSettled(children)
+      if (children.size === 0)
+        return leftFromCleanupFailures(lateCleanupFailures, failure)
+
+      const settled = await Promise.allSettled(children)
+      return leftFromCleanupFailures(
+        [
+          ...lateCleanupFailures,
+          ...cleanupFailuresFromSettledChildren(settled),
+        ],
+        failure,
+      )
     },
     fail,
     currentFailure: () => failure,
@@ -194,7 +222,9 @@ function createScopeRuntime(parent?: AbortSignal): ScopeRuntime {
 
     const child = startScopedTask(owner, task)
     return child.promise.then((result) => {
-      if (result._tag === 'Left') owner.fail(result)
+      if (result._tag === 'Left') {
+        if (owner.currentFailure() === undefined) owner.fail(result)
+      }
       return result
     })
   }
@@ -226,15 +256,20 @@ function createScopeRuntime(parent?: AbortSignal): ScopeRuntime {
         )
         handles[index] = handle
 
-        void handle.promise.then((result) => {
+        void handle.promise.then(async (result) => {
           if (settled) return
 
           if (result._tag === 'Left') {
             settled = true
             handles[index] = undefined
-            owner.fail(result)
-            abortScopedTasks(handles, result.error, index)
-            resolve(result)
+            const cleanupFailures = await abortAndCollectScopedTasks(
+              handles,
+              result.error,
+              index,
+            )
+            const finalResult = withSuppressed(result, cleanupFailures)
+            owner.fail(finalResult)
+            resolve(finalResult)
             return
           }
 
@@ -280,17 +315,27 @@ function createScopeRuntime(parent?: AbortSignal): ScopeRuntime {
         )
         handles[index] = handle
 
-        void handle.promise.then((result) => {
+        void handle.promise.then(async (result) => {
           if (settled) return
           settled = true
           handles[index] = undefined
 
-          if (result._tag === 'Left') owner.fail(result)
-          abortScopedTasks(
+          const cleanupFailures = await abortAndCollectScopedTasks(
             handles,
-            result._tag === 'Left' ? result.error : undefined,
+            result._tag === 'Left' ? result.error : siblingSettled(),
             index,
           )
+          const finalResult =
+            result._tag === 'Left'
+              ? withSuppressed(result, cleanupFailures)
+              : leftFromCleanupFailures(cleanupFailures)
+
+          if (finalResult?._tag === 'Left') {
+            owner.fail(finalResult)
+            resolve(finalResult)
+            return
+          }
+
           resolve(result)
         })
       }
@@ -319,20 +364,16 @@ function createScopeRuntime(parent?: AbortSignal): ScopeRuntime {
       }
     }
 
-    const childPromise = Promise.try(() => task(childScope.signal))
-      .then((result) => (childScope.currentFailure() ?? result) as Exit<E, A>)
-      .catch((cause) => toRejectedLeft(cause) as Exit<E, A>)
-      .then(async (result) => {
-        await childScope.close()
-        return result
-      })
+    const childPromise = runScopedTask(childScope, task)
 
     children.add(childPromise)
     void childPromise.then(
-      () => {
+      (result) => {
+        recordLateCleanupFailures(result)
         children.delete(childPromise)
       },
-      () => {
+      (cause) => {
+        recordLateCleanupFailures(toRejectedLeft(cause))
         children.delete(childPromise)
       },
     )
@@ -340,6 +381,18 @@ function createScopeRuntime(parent?: AbortSignal): ScopeRuntime {
     return {
       promise: childPromise,
       abort: childScope.abort,
+    }
+  }
+
+  function recordLateCleanupFailures(result: Either<any, any>): void {
+    if (closing) return
+
+    const currentFailure = failure
+    if (currentFailure === undefined) return
+
+    const cleanupFailures = cleanupFailuresFromResult(result)
+    if (cleanupFailures.length > 0) {
+      failure = withSuppressed(currentFailure, cleanupFailures)
     }
   }
 
@@ -354,14 +407,150 @@ function createScopeRuntime(parent?: AbortSignal): ScopeRuntime {
   return scope
 }
 
-function abortScopedTasks(
+async function runScopedTask<E, A>(
+  childScope: ScopeRuntime,
+  task: ScopeTask<E, A>,
+): Promise<Exit<E, A>> {
+  let result: Exit<E, A>
+
+  try {
+    const taskResult = await Promise.try(() => task(childScope.signal))
+    result = finishScopedTaskResult(childScope, taskResult as Exit<E, A>)
+  } catch (cause) {
+    result = finishScopedTaskResult(
+      childScope,
+      toRejectedLeft(cause) as Exit<E, A>,
+    )
+  }
+
+  const closeFailure = await childScope.close()
+  if (closeFailure === undefined || closeFailure === result) return result
+
+  return (
+    result._tag === 'Left'
+      ? withSuppressed(result, cleanupFailuresFromLeft(closeFailure))
+      : closeFailure
+  ) as Exit<E, A>
+}
+
+function finishScopedTaskResult<E, A>(
+  childScope: ScopeRuntime,
+  result: Exit<E, A>,
+): Exit<E, A> {
+  const failure = childScope.currentFailure()
+  if (failure === undefined) return result
+  if (failure === result) return result
+  if (result._tag === 'Right') return failure as Exit<E, A>
+
+  const cleanupFailures = cleanupFailuresFromLeft(result)
+  return cleanupFailures.length === 0
+    ? (failure as Exit<E, A>)
+    : (withSuppressed(failure, cleanupFailures) as Exit<E, A>)
+}
+
+async function abortAndCollectScopedTasks(
   handles: readonly (ScopedTaskHandle<any, any> | undefined)[],
   reason: unknown,
   except?: number,
-): void {
+): Promise<readonly Rejected[]> {
+  const promises: Promise<Exit<any, any>>[] = []
   for (let index = 0; index < handles.length; index++) {
-    if (index !== except) handles[index]?.abort(reason)
+    if (index === except) continue
+
+    const handle = handles[index]
+    if (handle === undefined) continue
+
+    handle.abort(reason)
+    promises.push(handle.promise)
   }
+
+  if (promises.length === 0) return []
+  return cleanupFailuresFromSettledChildren(await Promise.allSettled(promises))
+}
+
+function cleanupFailuresFromSettledChildren(
+  settled: readonly PromiseSettledResult<Either<any, any>>[],
+): readonly Rejected[] {
+  const failures: Rejected[] = []
+
+  for (const result of settled) {
+    if (result.status === 'rejected') {
+      failures.push(rejected(result.reason))
+      continue
+    }
+
+    failures.push(...cleanupFailuresFromResult(result.value))
+  }
+
+  return failures
+}
+
+function cleanupFailuresFromResult(
+  result: Either<any, any>,
+): readonly Rejected[] {
+  return result._tag === 'Left' ? cleanupFailuresFromLeft(result) : []
+}
+
+function cleanupFailuresFromLeft(result: Left<any>): readonly Rejected[] {
+  return cleanupFailuresFromError(result.error)
+}
+
+function cleanupFailuresFromError(error: unknown): readonly Rejected[] {
+  if (isRejectedError(error)) return [error]
+  if (isSuppressedError(error)) {
+    return error.suppressed.flatMap((suppressedError) =>
+      cleanupFailuresFromError(suppressedError),
+    )
+  }
+
+  return []
+}
+
+function leftFromCleanupFailures(
+  cleanupFailures: readonly Rejected[],
+  primary?: Left<any>,
+): Left<any> | undefined {
+  if (cleanupFailures.length === 0) return primary
+  if (primary !== undefined) return withSuppressed(primary, cleanupFailures)
+
+  const [first, ...rest] = cleanupFailures
+  if (first === undefined) return undefined
+  return rest.length === 0 ? left(first) : left(suppressed(first, rest))
+}
+
+function withSuppressed(
+  primary: Left<any>,
+  cleanupFailures: readonly Rejected[],
+): Left<any> {
+  if (cleanupFailures.length === 0) return primary
+
+  const error = primary.error
+  return left(
+    isSuppressedError(error)
+      ? suppressed(error.error, [...error.suppressed, ...cleanupFailures])
+      : suppressed(error, cleanupFailures),
+  )
+}
+
+function isRejectedError(error: unknown): error is Rejected {
+  return (
+    error !== null &&
+    typeof error === 'object' &&
+    (error as { readonly _tag?: unknown })._tag === 'Rejected'
+  )
+}
+
+function isSuppressedError(error: unknown): error is {
+  readonly _tag: 'Suppressed'
+  readonly error: unknown
+  readonly suppressed: readonly unknown[]
+} {
+  return (
+    error !== null &&
+    typeof error === 'object' &&
+    (error as { readonly _tag?: unknown })._tag === 'Suppressed' &&
+    Array.isArray((error as { readonly suppressed?: unknown }).suppressed)
+  )
 }
 
 function createRaiseContext(parent?: AbortSignal): RaiseContextHandle {
@@ -430,8 +619,10 @@ function peekScope(source: ScopeSource | undefined): ScopeRuntime | undefined {
   return isRaiseContextHandle(source) ? source.peekScope() : source
 }
 
-async function closeScope(source: ScopeSource | undefined): Promise<void> {
-  await peekScope(source)?.close()
+async function closeScope(
+  source: ScopeSource | undefined,
+): Promise<Left<any> | undefined> {
+  return await peekScope(source)?.close()
 }
 
 function closeSyncGenerator(gen: Generator<any, any, unknown>): void {
