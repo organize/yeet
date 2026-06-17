@@ -2,3 +2,5 @@ node_modules
 dist
 .vscode
 bench-results.json
+bench-results.*.json
+bench-results.*.csv

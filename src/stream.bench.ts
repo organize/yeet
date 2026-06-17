@@ -1,5 +1,6 @@
 import { afterAll, bench, describe } from 'vitest'
 
+import { cleanupBenchFixtures, importBenchFixture } from './bench-fixture.ts'
 import { BENCH_OPTS } from './bench-options.ts'
 import { type Either } from './either.ts'
 import { bytes, collectText, consume, ndjson, sse } from './stream.ts'
@@ -169,8 +170,9 @@ const pluginOptimized = await importPluginBenchModule(
   await transformWithPlugin(PLUGIN_BENCH_SOURCE),
 )
 
-afterAll(() => {
+afterAll(async () => {
   void benchSink.value
+  await cleanupBenchFixtures()
 })
 
 describe('streams: bytes', () => {
@@ -298,14 +300,10 @@ function indexer(): () => number {
   return () => index++
 }
 
-function moduleUrl(code: string): string {
-  return `data:text/javascript;base64,${Buffer.from(code).toString('base64')}`
-}
-
 async function importPluginBenchModule(
   code: string,
 ): Promise<PluginBenchModule> {
-  return (await import(moduleUrl(code))) as PluginBenchModule
+  return importBenchFixture<PluginBenchModule>(code, 'stream')
 }
 
 async function transformWithPlugin(code: string): Promise<string> {
