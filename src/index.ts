@@ -53,8 +53,16 @@ export type {
   ScopeTaskError,
   ScopeTaskValue,
   ScopeTaskValues,
+  SiblingSettled,
+  Suppressed,
 } from './async.ts'
-export { aborted, rejected, raise } from './async.ts'
+export {
+  aborted,
+  rejected,
+  raise,
+  siblingSettled,
+  suppressed,
+} from './async.ts'
 
 export type {
   Collected,

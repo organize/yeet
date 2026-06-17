@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
-import { type Aborted, type Exit, type Rejected } from './async.ts'
+import {
+  type Aborted,
+  type Exit,
+  type ExitError,
+  type Rejected,
+  siblingSettled,
+} from './async.ts'
 import {
   either,
   capture,
@@ -203,6 +209,19 @@ async function abortAsLeft<const E>(
   })
 }
 
+async function rejectOnAbort(
+  signal: AbortSignal,
+  cause: unknown,
+): Promise<Either<never, never>> {
+  if (!signal.aborted) {
+    await new Promise<void>((resolve) => {
+      signal.addEventListener('abort', () => resolve(), { once: true })
+    })
+  }
+
+  throw cause
+}
+
 describe('either (async)', () => {
   it('returns Right with the final value on success', async () => {
     const result = await either(async function* (_raise) {
@@ -345,7 +364,7 @@ describe('either scoped signal', () => {
     })
     const typed: Promise<
       Either<
-        Rejected | Aborted,
+        ExitError<never>,
         {
           user: { id: 'user-1' }
           settings: { theme: 'dark' }
@@ -362,11 +381,13 @@ describe('either scoped signal', () => {
 
   it('cancels sibling tasks when a fork returns Left', async () => {
     const events: string[] = []
+    const reasons: unknown[] = []
 
     const result = await either(async function* ({ signal }) {
       const slow = signal.fork(async (child) => {
         events.push('slow:start')
         const result = await abortAsLeft(child, 'SlowAborted' as const)
+        reasons.push(child.reason)
         events.push('slow:aborted')
         return result
       })
@@ -382,6 +403,7 @@ describe('either scoped signal', () => {
 
     expectLeft(result as Either<unknown, unknown>, 'Boom')
     expect(events).toEqual(['slow:start', 'fail', 'slow:aborted'])
+    expect(reasons).toEqual(['Boom'])
   })
 
   it('runs signal.forkAll concurrently and preserves tuple order', async () => {
@@ -407,12 +429,14 @@ describe('either scoped signal', () => {
 
   it('cancels sibling tasks when signal.forkAll sees a Left', async () => {
     const events: string[] = []
+    const reasons: unknown[] = []
 
     const result = await either(async function* ({ signal }) {
       return yield* await signal.forkAll([
         async (child) => {
           events.push('slow:start')
           const result = await abortAsLeft(child, 'SlowAborted' as const)
+          reasons.push(child.reason)
           events.push('slow:aborted')
           return result
         },
@@ -425,16 +449,19 @@ describe('either scoped signal', () => {
 
     expectLeft(result as Either<unknown, unknown>, 'Boom')
     expect(events).toEqual(['slow:start', 'fail', 'slow:aborted'])
+    expect(reasons).toEqual(['Boom'])
   })
 
   it('lets signal.forkRace return the first Right without poisoning the scope', async () => {
     const events: string[] = []
+    const reasons: unknown[] = []
 
     const result = await either(async function* ({ signal }) {
       const raced = yield* await signal.forkRace([
         async (child) => {
           events.push('slow:start')
           const result = await abortAsLeft(child, 'SlowAborted' as const)
+          reasons.push(child.reason)
           events.push('slow:aborted')
           return result
         },
@@ -451,16 +478,34 @@ describe('either scoped signal', () => {
 
     expectRight(result, ['fast', 'after'])
     expect(events).toEqual(['slow:start', 'fast', 'slow:aborted'])
+    expect(reasons).toEqual([siblingSettled()])
+  })
+
+  it('returns Rejected when a forkRace loser rejects during abort cleanup', async () => {
+    const cause = new Error('close failed')
+
+    const result = await either(async function* ({ signal }) {
+      return yield* await signal.forkRace([
+        async (child) => await rejectOnAbort(child, cause),
+        () => right('winner' as const),
+      ] as const)
+    })
+
+    expect(result._tag).toBe('Left')
+    if (result._tag !== 'Left') return
+    expect(result.error).toEqual({ _tag: 'Rejected', cause })
   })
 
   it('lets signal.forkRace return the first Left and cancel losers', async () => {
     const events: string[] = []
+    const reasons: unknown[] = []
 
     const result = await either(async function* ({ signal }) {
       return yield* await signal.forkRace([
         async (child) => {
           events.push('slow:start')
           const result = await abortAsLeft(child, 'SlowAborted' as const)
+          reasons.push(child.reason)
           events.push('slow:aborted')
           return result
         },
@@ -474,6 +519,26 @@ describe('either scoped signal', () => {
 
     expectLeft(result as Either<unknown, unknown>, 'RaceFailed')
     expect(events).toEqual(['slow:start', 'fail', 'slow:aborted'])
+    expect(reasons).toEqual(['RaceFailed'])
+  })
+
+  it('suppresses abort cleanup rejection under the primary forkAll failure', async () => {
+    const cause = new Error('rollback failed')
+
+    const result = await either(async function* ({ signal }) {
+      return yield* await signal.forkAll([
+        async (child) => await rejectOnAbort(child, cause),
+        () => left('PrimaryFailed' as const),
+      ] as const)
+    })
+
+    expect(result._tag).toBe('Left')
+    if (result._tag !== 'Left') return
+    expect(result.error).toEqual({
+      _tag: 'Suppressed',
+      error: 'PrimaryFailed',
+      suppressed: [{ _tag: 'Rejected', cause }],
+    })
   })
 
   it('returns Rejected for an empty signal.forkRace', async () => {
