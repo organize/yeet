@@ -12,9 +12,13 @@ type FuzzError =
 
 type FuzzValue = { readonly id: number; readonly value: string }
 type RejectCause = { readonly _tag: 'RejectCause'; readonly id: number }
+type AbortRejectCause = {
+  readonly _tag: 'AbortRejectCause'
+  readonly id: number
+}
 type ParentReason = { readonly _tag: 'ParentAbort'; readonly seed: number }
 
-type SettleKind = 'right' | 'left' | 'reject'
+type SettleKind = 'right' | 'left' | 'reject' | 'reject-on-abort'
 
 type Operation =
   | { readonly _tag: 'Settle'; readonly id: number; readonly kind: SettleKind }
@@ -29,17 +33,27 @@ type Scenario = {
   readonly operations: readonly Operation[]
 }
 
+type NestedScenario = {
+  readonly seed: number
+  readonly depth: number
+  readonly settleKind: Exclude<SettleKind, 'reject-on-abort'>
+  readonly parentFirst: boolean
+  readonly parentReason: ParentReason
+}
+
 type Expected =
   | {
       readonly _tag: 'Right'
       readonly value: unknown
       readonly abortIds: ReadonlySet<number>
+      readonly cleanupRejectIds: ReadonlySet<number>
       readonly terminalIndex: number
     }
   | {
       readonly _tag: 'Left'
       readonly error: unknown
       readonly abortIds: ReadonlySet<number>
+      readonly cleanupRejectIds: ReadonlySet<number>
       readonly terminalIndex: number
     }
 
@@ -55,10 +69,18 @@ type FuzzTask = {
   readonly leftError: FuzzError
   readonly abortError: FuzzError
   readonly rejectCause: RejectCause
+  readonly abortRejectCause: AbortRejectCause
   readonly task: ScopeTask<FuzzError, FuzzValue>
   readonly abortReasons: unknown[]
   startCount: number
-  state: 'pending' | 'right' | 'left' | 'rejected' | 'aborted'
+  rejectOnAbort: boolean
+  state:
+    | 'pending'
+    | 'right'
+    | 'left'
+    | 'rejected'
+    | 'aborted'
+    | 'abort-rejected'
   signal?: ScopeSignal
   settle: (kind: SettleKind) => void
 }
@@ -71,6 +93,17 @@ describe('scoped signal fuzzer', () => {
         await runScenario(scenario)
       } catch (cause) {
         throw new Error(formatScenario(scenario), { cause })
+      }
+    }
+  }, 10_000)
+
+  it('fuzzes nested fork teardown and parent abort interleavings', async () => {
+    for (let seed = 1; seed <= 120; seed++) {
+      const scenario = createNestedScenario(seed)
+      try {
+        await runNestedScenario(scenario)
+      } catch (cause) {
+        throw new Error(formatNestedScenario(scenario), { cause })
       }
     }
   }, 10_000)
@@ -117,6 +150,83 @@ async function runScenario(scenario: Scenario): Promise<void> {
   assertTaskInvariants(tasks, expected, scenario)
 }
 
+async function runNestedScenario(scenario: NestedScenario): Promise<void> {
+  const leaf = createFuzzTask(0)
+  const records = Array.from({ length: scenario.depth }, (_, level) => ({
+    level,
+    startCount: 0,
+    abortReasons: [] as unknown[],
+    signal: undefined as ScopeSignal | undefined,
+  }))
+  const controller = new AbortController()
+  const resultPromise = either(controller.signal, async function* ({ signal }) {
+    return yield* await signal.fork(
+      createNestedTask(records, leaf, 0, scenario.depth),
+    )
+  })
+
+  await flushAsyncWork()
+  for (const record of records) {
+    expect(record.startCount, formatNestedScenario(scenario)).toBe(1)
+  }
+  expect(leaf.startCount, formatNestedScenario(scenario)).toBe(1)
+
+  if (scenario.parentFirst) {
+    controller.abort(scenario.parentReason)
+  } else {
+    leaf.settle(scenario.settleKind)
+  }
+
+  await flushAsyncWork()
+  const result = await withTimeout(
+    resultPromise,
+    formatNestedScenario(scenario),
+  )
+  assertNestedExpectedResult(result, scenario, leaf)
+
+  controller.abort({ _tag: 'LateNestedAbort', seed: scenario.seed })
+  await flushAsyncWork()
+
+  if (scenario.parentFirst) {
+    for (const record of records) {
+      expect(record.signal?.aborted, formatNestedScenario(scenario)).toBe(true)
+      expect(record.abortReasons).toEqual([scenario.parentReason])
+    }
+    expect(leaf.signal?.aborted, formatNestedScenario(scenario)).toBe(true)
+    expect(leaf.abortReasons).toEqual([scenario.parentReason])
+  }
+}
+
+function createNestedTask(
+  records: readonly {
+    startCount: number
+    abortReasons: unknown[]
+    signal: ScopeSignal | undefined
+  }[],
+  leaf: FuzzTask,
+  level: number,
+  depth: number,
+): ScopeTask<unknown, unknown> {
+  return async (signal) => {
+    const record = records[level]
+    if (record !== undefined) {
+      record.startCount++
+      record.signal = signal
+      if (signal.aborted) record.abortReasons.push(signal.reason)
+      else {
+        signal.addEventListener(
+          'abort',
+          () => record.abortReasons.push(signal.reason),
+          { once: true },
+        )
+      }
+    }
+
+    if (level === depth - 1) return leaf.task(signal)
+    return await signal.fork(createNestedTask(records, leaf, level + 1, depth))
+  }
+}
+
 async function* runScopedMode(
   mode: Mode,
   signal: ScopeSignal,
@@ -158,6 +268,7 @@ function createFuzzTask(id: number): FuzzTask {
   const leftError = { _tag: 'TaskFailed' as const, id }
   const abortError = { _tag: 'TaskAborted' as const, id }
   const rejectCause = { _tag: 'RejectCause' as const, id }
+  const abortRejectCause = { _tag: 'AbortRejectCause' as const, id }
   const abortReasons: unknown[] = []
 
   const record: FuzzTask = {
@@ -166,8 +277,10 @@ function createFuzzTask(id: number): FuzzTask {
     leftError,
     abortError,
     rejectCause,
+    abortRejectCause,
     abortReasons,
     startCount: 0,
+    rejectOnAbort: false,
     state: 'pending',
     async task(signal) {
       record.startCount++
@@ -190,6 +303,12 @@ function createFuzzTask(id: number): FuzzTask {
     settle(kind) {
       if (record.state !== 'pending') return
 
+      if (kind === 'reject-on-abort') {
+        record.rejectOnAbort = true
+        if (record.signal?.aborted === true) settleAbort(record)
+        return
+      }
+
       if (kind === 'right') {
         record.state = 'right'
         deferred.resolve(right(value))
@@ -210,6 +329,12 @@ function createFuzzTask(id: number): FuzzTask {
   function settleAbort(task: FuzzTask): void {
     if (task.state !== 'pending') return
 
+    if (task.rejectOnAbort) {
+      task.state = 'abort-rejected'
+      deferred.reject(task.abortRejectCause)
+      return
+    }
+
     task.state = 'aborted'
     deferred.resolve(left(abortError))
   }
@@ -222,16 +347,22 @@ function computeExpected(
   tasks: readonly FuzzTask[],
 ): Expected {
   const pending = new Set(tasks.map((task) => task.id))
+  const rejectOnAbort = new Set<number>()
   const values: FuzzValue[] = []
   values.length = tasks.length
 
   for (let index = 0; index < scenario.operations.length; index++) {
     const operation = scenario.operations[index] as Operation
     if (operation._tag === 'ParentAbort') {
+      const cleanupRejectIds = intersectSets(pending, rejectOnAbort)
       return {
         _tag: 'Left',
-        error: { _tag: 'Aborted', reason: scenario.parentReason },
+        error: withCleanupFailures(
+          { _tag: 'Aborted', reason: scenario.parentReason },
+          cleanupFailuresForIds(cleanupRejectIds, tasks),
+        ),
         abortIds: new Set(pending),
+        cleanupRejectIds,
         terminalIndex: index,
       }
     }
@@ -239,14 +370,32 @@ function computeExpected(
     const task = tasks[operation.id]
     if (task === undefined || !pending.has(task.id)) continue
 
+    if (operation.kind === 'reject-on-abort') {
+      rejectOnAbort.add(task.id)
+      continue
+    }
+
     pending.delete(task.id)
 
     if (operation.kind === 'right') {
       if (scenario.mode === 'forkRace') {
+        const cleanupRejectIds = intersectSets(pending, rejectOnAbort)
+        const cleanupFailures = cleanupFailuresForIds(cleanupRejectIds, tasks)
+        if (cleanupFailures.length > 0) {
+          return {
+            _tag: 'Left',
+            error: primaryFromCleanupFailures(cleanupFailures),
+            abortIds: new Set(pending),
+            cleanupRejectIds,
+            terminalIndex: index,
+          }
+        }
+
         return {
           _tag: 'Right',
           value: { mode: 'forkRace', value: task.value, after: 'after' },
           abortIds: new Set(pending),
+          cleanupRejectIds,
           terminalIndex: index,
         }
       }
@@ -257,24 +406,72 @@ function computeExpected(
           _tag: 'Right',
           value: { mode: scenario.mode, values },
           abortIds: new Set(),
+          cleanupRejectIds: new Set(),
           terminalIndex: index,
         }
       }
       continue
     }
 
+    const cleanupRejectIds = intersectSets(pending, rejectOnAbort)
     return {
       _tag: 'Left',
-      error:
+      error: withCleanupFailures(
         operation.kind === 'left'
           ? task.leftError
           : ({ _tag: 'Rejected', cause: task.rejectCause } satisfies Rejected),
+        cleanupFailuresForIds(cleanupRejectIds, tasks),
+      ),
       abortIds: new Set(pending),
+      cleanupRejectIds,
       terminalIndex: index,
     }
   }
 
   throw new Error('Scenario did not contain a settling operation')
+}
+
+function intersectSets(
+  left: ReadonlySet<number>,
+  right: ReadonlySet<number>,
+): ReadonlySet<number> {
+  const result = new Set<number>()
+  for (const value of left) {
+    if (right.has(value)) result.add(value)
+  }
+  return result
+}
+
+function cleanupFailuresForIds(
+  ids: ReadonlySet<number>,
+  tasks: readonly FuzzTask[],
+): readonly Rejected[] {
+  return Array.from(ids, (id) => ({
+    _tag: 'Rejected' as const,
+    cause: (tasks[id] as FuzzTask).abortRejectCause,
+  }))
+}
+
+function primaryFromCleanupFailures(
+  cleanupFailures: readonly Rejected[],
+): unknown {
+  const [first, ...rest] = cleanupFailures
+  return rest.length === 0
+    ? first
+    : { _tag: 'Suppressed', error: first, suppressed: rest }
+}
+
+function withCleanupFailures(
+  primary: unknown,
+  cleanupFailures: readonly Rejected[],
+): unknown {
+  return cleanupFailures.length === 0
+    ? primary
+    : {
+        _tag: 'Suppressed',
+        error: primary,
+        suppressed: cleanupFailures,
+      }
 }
 
 function assertExpectedResult(
@@ -308,10 +505,51 @@ function assertTaskInvariants(
     )
 
     if (expected.abortIds.has(task.id)) {
-      expect(task.state, label).toBe('aborted')
+      expect(task.state, label).toBe(
+        expected.cleanupRejectIds.has(task.id) ? 'abort-rejected' : 'aborted',
+      )
       expect(task.signal?.aborted, label).toBe(true)
     }
   }
+}
+
+function assertNestedExpectedResult(
+  result: Either<unknown, unknown>,
+  scenario: NestedScenario,
+  leaf: FuzzTask,
+): void {
+  const label = formatNestedScenario(scenario)
+
+  if (scenario.parentFirst) {
+    expect(result._tag, label).toBe('Left')
+    if (result._tag === 'Left')
+      expect(result.error, label).toEqual({
+        _tag: 'Aborted',
+        reason: scenario.parentReason,
+      })
+    expect(leaf.state, label).toBe('aborted')
+    return
+  }
+
+  if (scenario.settleKind === 'right') {
+    expect(result._tag, label).toBe('Right')
+    if (result._tag === 'Right') expect(result.value, label).toEqual(leaf.value)
+    return
+  }
+
+  if (scenario.settleKind === 'left') {
+    expect(result._tag, label).toBe('Left')
+    if (result._tag === 'Left')
+      expect(result.error, label).toEqual(leaf.leftError)
+    return
+  }
+
+  expect(result._tag, label).toBe('Left')
+  if (result._tag === 'Left')
+    expect(result.error, label).toEqual({
+      _tag: 'Rejected',
+      cause: leaf.rejectCause,
+    })
 }
 
 function createScenario(seed: number): Scenario {
@@ -327,6 +565,16 @@ function createScenario(seed: number): Scenario {
     id,
     kind: pick(random, ['right', 'right', 'right', 'left', 'reject'] as const),
   }))
+
+  for (const id of ids) {
+    if (random() >= 0.35) continue
+    operations.splice(randomInt(random, operations.length), 0, {
+      _tag: 'Settle',
+      id,
+      kind: 'reject-on-abort',
+    })
+  }
+
   const hasParentAbort = random() < 0.3
   if (hasParentAbort) {
     operations.splice(randomInt(random, operations.length + 1), 0, {
@@ -341,6 +589,17 @@ function createScenario(seed: number): Scenario {
     withParent: hasParentAbort || random() < 0.5,
     parentReason: { _tag: 'ParentAbort', seed },
     operations,
+  }
+}
+
+function createNestedScenario(seed: number): NestedScenario {
+  const random = mulberry32(seed)
+  return {
+    seed,
+    depth: 1 + randomInt(random, 4),
+    settleKind: pick(random, ['right', 'left', 'reject'] as const),
+    parentFirst: random() < 0.5,
+    parentReason: { _tag: 'ParentAbort', seed },
   }
 }
 
@@ -411,6 +670,10 @@ function formatScenario(scenario: Scenario): string {
         : `${operation.id}:${operation.kind}`,
     )
     .join(',')}`
+}
+
+function formatNestedScenario(scenario: NestedScenario): string {
+  return `seed=${scenario.seed} depth=${scenario.depth} settle=${scenario.settleKind} parentFirst=${scenario.parentFirst}`
 }
 
 function taskLabel(scenario: Scenario, task: FuzzTask): string {
