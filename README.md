@@ -1,7 +1,7 @@
 # yeet
 
-> Dependency-free. Tree-shakeable. Side-effect free. About 3.3 kB gzipped for
-> the core, with stream helpers on a separate 2.7 kB subpath.
+> Dependency-free. Tree-shakeable. Side-effect free. About 4.0 kB gzipped for
+> the core, with stream helpers on a separate 2.9 kB subpath.
 
 `yeet` is what happens when `Either` stops being a ceremonial robe and starts
 doing field work.
@@ -379,7 +379,7 @@ type ScopeSignal = AbortSignal & {
   ): Promise<Exit<ScopeTaskError<T[number]>, ScopeTaskValue<T[number]>>>
 }
 
-type Exit<E, A> = Either<E | Rejected | Aborted, A>
+type Exit<E, A> = Either<E | Rejected | Aborted | Suppressed, A>
 
 type RaiseContext = Raise & {
   readonly raise: Raise
@@ -438,6 +438,22 @@ aborted and awaited before the result settles. The spell is small, but it is a
 real step toward structured concurrency: children do not wander off after the
 generator is done.
 
+If cleanup fails while the scope is unwinding, yeet keeps the original cause and
+attaches teardown failures as `Suppressed` data:
+
+```ts
+type Suppressed<E = unknown> = {
+  readonly _tag: 'Suppressed'
+  readonly error: E
+  readonly suppressed: readonly Rejected[]
+}
+```
+
+So a first `Left` still wins, but a sibling socket that throws while closing is
+not tossed into the tall grass. If a `forkRace` winner was a `Right` and a loser
+rejects during abort cleanup, the scoped race returns that cleanup failure as
+`Left<Rejected>`.
+
 For the cleanest inferred error unions, `yield* await` the fork promises you
 care about, as above. TypeScript cannot see the error type of a detached fork
 that is started and never referenced again; JavaScript may be magical, but it is
@@ -462,8 +478,9 @@ const result = await either(async function* ({ signal }) {
 ```
 
 Use `signal.forkRace` when the first typed outcome wins. A winning `Right`
-aborts the losers without poisoning the enclosing `either`; a winning `Left`
-aborts the losers and short-circuits as usual.
+aborts the losers with `siblingSettled()` (`{ _tag: 'SiblingSettled' }`) without
+poisoning the enclosing `either`; a winning `Left` aborts the losers with that
+failure and short-circuits as usual.
 
 ```ts
 const result = await either(async function* ({ signal }) {
@@ -489,6 +506,12 @@ type Aborted = { readonly _tag: 'Aborted'; readonly reason: unknown }
 That `reason` is honestly `unknown`. `controller.abort()` with no argument gives
 you the platform's default `AbortError` `DOMException`; `controller.abort(x)`
 gives you `x`. Yeet does not comb its hair into a library-shaped error for you.
+
+Inside scoped child tasks, avoid returning a domain-flavored
+`Left<{ _tag: 'Cancelled' }>` solely because `signal.aborted`. It widens the
+task's error union, and losing fork/race tasks are discarded anyway. Let the
+operation honor the signal, reserve `Left` for failures the parent should see,
+and let yeet's `Aborted` / `SiblingSettled` values explain the cancellation.
 
 Cancellation is cooperative, because JavaScript is cooperative. The driver can
 stop advancing the generator and unwind resources, but it cannot interrupt
@@ -661,10 +684,26 @@ const result = await either(signal, async function* ({ signal }) {
 // >
 ```
 
+Malformed NDJSON is an item-level failure: a bad line yields
+`Left<ParseError>`, and if your loop handles it and continues, yeet keeps
+reading the next line. Byte limits, line limits, invalid chunks, and decode
+failures are stream-fatal because the underlying byte flow is no longer a place
+to improvise.
+
 Cancellation follows the same cooperative rule as `either(signal, ...)`: pass
 the signal to the driver and to the stream helper. If the source ignores the
 signal and never settles, yeet cannot summon a settlement from the deep. It can
 only stop advancing once JavaScript hands control back.
+
+Consumer-driven exits tear down the source too. If you `break` a
+`for await (const next of ndjson(...) | sse(...) | lines(...) | chunks(...))`
+loop, or `consume()` stops because `each` returns a `Left`, yeet cancels the
+underlying `ReadableStream` instead of merely releasing the reader lock. When
+there is a concrete reason, yeet passes it through to `cancel(reason)`:
+`signal.reason` for aborts, the external error cause for `options.error`, and
+the typed stream error for fatal stream failures. A plain consumer `break` has
+no deeper reason to hand down; sometimes the answer is simply "we are done
+here."
 
 ## Composition Helpers
 
@@ -999,9 +1038,9 @@ if (hydrated.issues === undefined) {
 Nested schemas are optional. Without them, `yeet` validates the outer
 `{ _tag, error | value }` envelope and leaves the payload as `unknown`.
 
-Scoped async work has a small extra vocabulary: domain errors, `Aborted`, and
-`Rejected`. Use `exitErrorSchema`, `serializedExitSchema`, and `exitSchema` when
-you want that whole outcome to be a portable value.
+Scoped async work has a small extra vocabulary: domain errors, `Aborted`,
+`Rejected`, and `Suppressed`. Use `exitErrorSchema`, `serializedExitSchema`, and
+`exitSchema` when you want that whole outcome to be a portable value.
 
 ```ts
 import { exitSchema, serializedExitSchema } from '@big-time/yeet'
@@ -1017,12 +1056,12 @@ const HydratedUserExit = exitSchema({
   value: User,
 })
 // inferred: ExitSchema<ApiError, User>
-// validates Left<ApiError | Aborted | Rejected> | Right<User>
+// validates Left<ApiError | Aborted | Rejected | Suppressed> | Right<User>
 ```
 
 If no domain `error` schema is provided, the Exit schemas accept only yeet's
-built-in `Aborted` and `Rejected` error payloads. Add `reason` or `cause` schemas
-when those payloads need tighter validation too.
+built-in `Aborted`, `Rejected`, and `Suppressed` error payloads. Add `reason` or
+`cause` schemas when those payloads need tighter validation too.
 
 ### Exporting JSON Schema
 
@@ -1258,6 +1297,8 @@ the keys to the old truck.
 | `raise(promiseLike)`           | Capture promise rejection as `Left<Rejected>`                      |
 | `aborted(reason)`              | Create an `Aborted` error payload                                  |
 | `rejected(cause)`              | Create a `Rejected` error payload                                  |
+| `siblingSettled()`             | Get the race-loser cancellation reason singleton                   |
+| `suppressed(error, failures)`  | Create a `Suppressed` cleanup-failure payload                      |
 
 ### Serialization And Schemas
 
