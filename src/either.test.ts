@@ -475,6 +475,34 @@ describe('serialization schemas', () => {
     })
   })
 
+  it('validates Suppressed Exit errors with Standard Schema', async () => {
+    const schema = exitSchema({
+      error: stringSchema,
+      cause: stringSchema,
+      value: numberSchema,
+    })
+
+    const result = await schema['~standard'].validate({
+      _tag: 'Left',
+      error: {
+        _tag: 'Suppressed',
+        error: 'PrimaryFailed',
+        suppressed: [{ _tag: 'Rejected', cause: 'CleanupFailed' }],
+      },
+    })
+
+    expect(result.issues).toBeUndefined()
+    if (result.issues !== undefined) return
+    expect(isLeft(result.value)).toBe(true)
+    if (result.value._tag === 'Left') {
+      expect(result.value.error).toEqual({
+        _tag: 'Suppressed',
+        error: 'PrimaryFailed',
+        suppressed: [{ _tag: 'Rejected', cause: 'CleanupFailed' }],
+      })
+    }
+  })
+
   it('rejects domain Exit errors without a domain error schema', async () => {
     const schema = serializedExitSchema()
 
@@ -614,6 +642,27 @@ describe('serialization schemas', () => {
                     cause: { type: 'string' },
                   },
                   required: ['_tag', 'cause'],
+                  additionalProperties: false,
+                },
+                {
+                  type: 'object',
+                  properties: {
+                    _tag: { enum: ['Suppressed'] },
+                    error: {},
+                    suppressed: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        properties: {
+                          _tag: { enum: ['Rejected'] },
+                          cause: { type: 'string' },
+                        },
+                        required: ['_tag', 'cause'],
+                        additionalProperties: false,
+                      },
+                    },
+                  },
+                  required: ['_tag', 'error', 'suppressed'],
                   additionalProperties: false,
                 },
                 { type: 'string' },

@@ -30,6 +30,45 @@ export const toRejectedLeft = (cause: unknown): Left<Rejected> =>
   left(rejected(cause))
 
 /**
+ * Represents an outcome where the primary failure is preserved, but cleanup or
+ * sibling teardown also failed while the scope was unwinding.
+ */
+export type Suppressed<Error = unknown, SuppressedError = unknown> = {
+  readonly _tag: 'Suppressed'
+  readonly error: Error
+  readonly suppressed: readonly SuppressedError[]
+}
+
+/**
+ * Constructs a {@link Suppressed} value.
+ * @param error - The primary failure that decided the outcome.
+ * @param suppressed - Secondary failures observed while unwinding.
+ */
+export const suppressed = <const Error, const SuppressedError>(
+  error: Error,
+  suppressed: readonly SuppressedError[],
+): Suppressed<Error, SuppressedError> => ({
+  _tag: 'Suppressed',
+  error,
+  suppressed,
+})
+
+/**
+ * The cancellation reason used when a scoped race has a `Right` winner and
+ * aborts its losing sibling tasks.
+ */
+export type SiblingSettled = {
+  readonly _tag: 'SiblingSettled'
+}
+
+const SIBLING_SETTLED: SiblingSettled = { _tag: 'SiblingSettled' }
+
+/**
+ * Returns the singleton {@link SiblingSettled} cancellation reason.
+ */
+export const siblingSettled = (): SiblingSettled => SIBLING_SETTLED
+
+/**
  * Represents an `AbortSignal` cancellation captured as a typed `Left` value.
  * Produced by `either(signal, async function* () { ... })` when the signal
  * aborts while the async generator is running.
@@ -58,6 +97,13 @@ export type ExitError<E = never, Reason = unknown, Cause = unknown> =
   | E
   | Aborted<Reason>
   | Rejected<Cause>
+  | Suppressed<
+      | E
+      | Aborted<Reason>
+      | Rejected<Cause>
+      | Suppressed<unknown, Rejected<Cause>>,
+      Rejected<Cause>
+    >
 
 /**
  * A typed outcome for scoped async work.

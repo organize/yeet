@@ -39,6 +39,12 @@ type ToJSONLike = {
   toJSON(): unknown
 }
 
+type SerializedEitherCandidate = {
+  readonly _tag?: unknown
+  readonly error?: unknown
+  readonly value?: unknown
+}
+
 class LeftIterator<E> implements Iterator<Left<E>, never, unknown> {
   private left: Left<E> | undefined
 
@@ -176,13 +182,13 @@ export function fromJSON<E, A>(value: SerializedEither<E, A>): Either<E, A> {
 export function isSerializedEither(
   value: unknown,
 ): value is SerializedEither<unknown, unknown> {
-  if (!isRecord(value)) return false
+  if (!isSerializedEitherCandidate(value)) return false
 
-  if (value['_tag'] === 'Left') {
+  if (value._tag === 'Left') {
     return hasOnlySerializedKeys(value, 'error')
   }
 
-  if (value['_tag'] === 'Right') {
+  if (value._tag === 'Right') {
     return hasOnlySerializedKeys(value, 'value')
   }
 
@@ -283,7 +289,7 @@ function hasToJSON(value: unknown): value is ToJSONLike {
 }
 
 function hasOnlySerializedKeys(
-  value: Record<PropertyKey, unknown>,
+  value: SerializedEitherCandidate,
   payloadKey: 'error' | 'value',
 ): boolean {
   const keys = Object.keys(value)
@@ -294,6 +300,8 @@ function hasOnlySerializedKeys(
   )
 }
 
-function isRecord(value: unknown): value is Record<PropertyKey, unknown> {
+function isSerializedEitherCandidate(
+  value: unknown,
+): value is SerializedEitherCandidate {
   return typeof value === 'object' && value !== null
 }
