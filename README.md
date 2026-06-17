@@ -1,16 +1,97 @@
 # yeet
 
-> Dependency-free. Tree-shakeable. Side-effect free. About 2.0 kB gzipped for
+> Dependency-free. Tree-shakeable. Side-effect free. About 3.3 kB gzipped for
 > the core, with stream helpers on a separate 2.7 kB subpath.
 
-`yeet` is a tiny `Either` library for TypeScript. It gives you typed
-`Left` / `Right` values, generator-based do-notation, async support,
-serialization helpers, Standard Schema integration, and an optional build-time
-optimizer.
+`yeet` is what happens when `Either` stops being a ceremonial robe and starts
+doing field work.
 
-No runtime dependencies. No method-chain cathedral. No pipe-operator pilgrimage.
+Write normal JavaScript. `yield*` a value to unwrap success. Hit a `Left`, and
+the computation exits with typed failure data. Rejected promises become
+`Left<Rejected>`. Aborts become `Left<Aborted>`. Forked child work belongs to
+the current generator and gets cancelled with it. Streams, bytes, schemas, and
+wire-friendly outcomes all speak the same small language.
 
-Just ordinary JavaScript control flow, with TypeScript quietly keeping score.
+No runtime dependencies. No method-chain cathedral. No pipe-operator
+pilgrimage. Just ordinary control flow, with TypeScript quietly keeping score.
+
+```ts
+import { either } from '@big-time/yeet'
+import { json } from '@big-time/yeet/stream'
+
+const result = await either(async function* ({ raise, signal }) {
+  const [user, settings] = yield* await signal.forkAll([
+    (signal) => fetchUser(id, signal),
+    (signal) => fetchSettings(id, signal),
+  ] as const)
+
+  if (!user.active) {
+    return raise({ _tag: 'InactiveUser' as const, id: user.id })
+  }
+
+  const response = yield* await raise(
+    fetch(`/api/profile/${user.id}`, { signal }),
+  )
+  const profile = yield* await json(response, { signal })
+
+  return { user, settings, profile }
+})
+
+// inferred:
+// Promise<
+//   Either<
+//     | Aborted
+//     | Rejected
+//     | FetchUserError
+//     | FetchSettingsError
+//     | StreamError
+//     | { _tag: "InactiveUser"; id: string },
+//     { user: User; settings: Settings; profile: unknown }
+//   >
+// >
+```
+
+That is the trick: errors are values, cancellation is a value, stream failures
+are values, and scoped concurrency still comes back as an `Either`. Add the
+optional unplugin and supported generator flows lower to plain branches at build
+time, like the narrator quietly removing the scaffolding after the bridge is
+built.
+
+The runtime stays tiny. The source stays boring in the best way. The types do
+the remembering.
+
+## But I'm Scared
+
+Good. A library named `yeet` should earn your trust before it starts carrying
+your checkout flow across the river.
+
+The core is plain tagged data:
+
+```ts
+left(error) // { _tag: "Left", error }
+right(value) // { _tag: "Right", value }
+```
+
+`either(function* () { ... })` is just a small runner for those values. If a
+`Left` appears, it stops and returns it. If everything is `Right`, it returns
+the final value. There is no hidden global state, no ambient context store, no
+runtime dependency quietly playing the violin in the walls.
+
+The fancier parts are opt-in:
+
+- the build-time optimizer is only an optimization; unsupported code is left
+  alone and still runs through the normal runtime
+- cancellation is cooperative and explicit; pass the `signal` to I/O that needs
+  to stop
+- scoped forks belong to the current async `either`; when the generator exits,
+  live children are aborted and awaited
+- stream helpers live on `@big-time/yeet/stream`, with size limits for the
+  places where "just read it all" becomes a haunted sentence
+- schemas accept Standard Schema-compatible validators like Zod, Valibot,
+  ArkType, or TypeBox, but yeet imports none of them
+
+You can start with only `left`, `right`, and `either`. The rest of the library
+waits politely until you ask for it.
 
 ## Contents
 
