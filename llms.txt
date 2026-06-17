@@ -45,11 +45,11 @@ The injected callback parameter is a callable `RaiseContext`; prefer
 `async function* ({ signal })` when you only need cancellation. The same enriched
 child signal is passed as the callback's second argument for compatibility.
 
-Inside async `either`, that signal also has `fork(task)`, `all(tasks)`, and
-`race(tasks)`. Use these for scoped child work; every task receives a child
-`ScopeSignal`. A forked child `Left`, a scoped `all` failure, a scoped `race`
-failure, a rejection, parent abort, or normal scope close aborts sibling work.
-These helpers are not root exports and are not for sync `either`.
+Inside async `either`, that signal also has `fork(task)`, `forkAll(tasks)`, and
+`forkRace(tasks)`. Use these for scoped child work; every task receives a child
+`ScopeSignal`. A forked child `Left`, a scoped `forkAll` failure, a scoped
+`forkRace` failure, a rejection, parent abort, or normal scope close aborts
+sibling work. These helpers are not root exports and are not for sync `either`.
 
 ```ts
 const result = await either(async function* ({ signal }) {
@@ -63,10 +63,10 @@ const result = await either(async function* ({ signal }) {
 // Promise<Either<Aborted | Rejected | FetchUserError | FetchSettingsError, { user: User; settings: Settings }>>
 ```
 
-For batches, prefer `yield* await signal.all([...])` over detached forks. It
+For batches, prefer `yield* await signal.forkAll([...])` over detached forks. It
 starts all child tasks, preserves tuple order, and cancels siblings on the first
-failure. Use `yield* await signal.race([...])` when the first child outcome wins;
-a winning `Right` aborts losers without poisoning the enclosing `either`.
+failure. Use `yield* await signal.forkRace([...])` when the first child outcome
+wins; a winning `Right` aborts losers without poisoning the enclosing `either`.
 
 ## Streams
 
