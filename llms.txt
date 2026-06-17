@@ -40,9 +40,33 @@ const result = await either(signal, async function* ({ signal }) {
 
 Cancellation is cooperative. Pass the same signal to `either`, stream helpers,
 and underlying I/O.
-When you also need `raise`, use `raise.signal`. The same signal is passed as the
-callback's second argument for compatibility, but prefer `raise.signal` or
-`async function* ({ signal })` in new examples.
+The injected callback parameter is a callable `RaiseContext`; prefer
+`async function* ({ raise, signal })` when you need both, or
+`async function* ({ signal })` when you only need cancellation. The same enriched
+child signal is passed as the callback's second argument for compatibility.
+
+Inside async `either`, that signal also has `fork(task)`, `all(tasks)`, and
+`race(tasks)`. Use these for scoped child work; every task receives a child
+`ScopeSignal`. A forked child `Left`, a scoped `all` failure, a scoped `race`
+failure, a rejection, parent abort, or normal scope close aborts sibling work.
+These helpers are not root exports and are not for sync `either`.
+
+```ts
+const result = await either(async function* ({ signal }) {
+  const user = signal.fork((signal) => fetchUser(id, signal))
+  const settings = signal.fork((signal) => fetchSettings(id, signal))
+  return {
+    user: yield* await user,
+    settings: yield* await settings,
+  }
+})
+// Promise<Either<Aborted | Rejected | FetchUserError | FetchSettingsError, { user: User; settings: Settings }>>
+```
+
+For batches, prefer `yield* await signal.all([...])` over detached forks. It
+starts all child tasks, preserves tuple order, and cancels siblings on the first
+failure. Use `yield* await signal.race([...])` when the first child outcome wins;
+a winning `Right` aborts losers without poisoning the enclosing `either`.
 
 ## Streams
 
@@ -83,10 +107,10 @@ const result = await either(signal, async function* ({ signal }) {
 Use `ndjson` / `sse` when each parsed item should compose with `yield*`:
 
 ```ts
-const result = await either(signal, async function* (raise) {
-  const res = yield* await raise(fetch(url, { signal: raise.signal }))
+const result = await either(signal, async function* ({ raise, signal }) {
+  const res = yield* await raise(fetch(url, { signal }))
 
-  for await (const next of sse(res.body, { signal: raise.signal })) {
+  for await (const next of sse(res.body, { signal })) {
     const event = yield* next
     if (event.event === 'error') return raise(event.data)
     yield* await handleProviderEvent(event)
@@ -108,7 +132,8 @@ Use `capture` to treat a `Left` as data, `all` for concurrent tuple inputs,
 errors, `firstOf` for first success, and `collect` to partition yielded values.
 
 Serialization helpers: `fromJSON`, `isSerializedEither`,
-`serializedEitherSchema`, `eitherSchema`.
+`serializedEitherSchema`, `eitherSchema`, `exitErrorSchema`,
+`serializedExitSchema`, `exitSchema`.
 
 Optional optimizer: import a bundler adapter from `@big-time/yeet/unplugin/*`
 to lower supported inline generator calls at build time.

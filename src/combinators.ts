@@ -1,8 +1,11 @@
 import {
   type Aborted,
   type AbortRaise,
-  type Raise,
+  type Exit,
+  type RaiseContext,
   type Rejected,
+  type ScopeSignal,
+  type ScopeTask,
   aborted,
   raise,
   toRejectedLeft,
@@ -47,87 +50,419 @@ function eitherSyncContinue<Eff extends Either<any, any>, Ret>(
 
 async function eitherAsync<Eff extends Either<any, any>, Ret>(
   gen: AsyncGenerator<Eff, Ret, unknown>,
+  scope?: ScopeSource,
 ): Promise<Either<any, any>> {
-  let next = await gen.next()
-  while (!next.done) {
-    const eff = next.value
-    if (eff._tag === 'Left') {
-      await closeAsyncGenerator(gen)
-      return eff
-    }
-    next = await gen.next(eff.value)
-  }
-  return finishEither(next.value)
-}
-
-type AbortState = {
-  readonly signal: AbortSignal
-  readonly promise: Promise<Left<Aborted>>
-  readonly result: () => Left<Aborted>
-  readonly cleanup: () => void
-}
-
-type AbortableNext<Eff, Ret> = IteratorResult<Eff, Ret> | Left<Aborted>
-
-async function eitherAsyncAbortable<Eff extends Either<any, any>, Ret>(
-  gen: AsyncGenerator<Eff, Ret, unknown>,
-  signal: AbortSignal,
-): Promise<Either<any, any>> {
-  const abort = createAbortState(signal)
   try {
-    let next = await nextOrAbort(gen, undefined, false, abort)
-    while (!isAbortResult(next) && !next.done) {
+    let value: unknown
+    let hasValue = false
+
+    while (true) {
+      const step = await nextOrScope(gen, value, hasValue, scope)
+      const next = step.result
+      if (isScopeFailure(next)) {
+        await closeAsyncGenerator(gen, step.pending)
+        return next
+      }
+
+      if (next.done) return finishEither(next.value)
+
       const eff = next.value
       if (eff._tag === 'Left') {
         await closeAsyncGenerator(gen)
         return eff
       }
-      next = await nextOrAbort(gen, eff.value, true, abort)
+      value = eff.value
+      hasValue = true
     }
-
-    if (isAbortResult(next)) {
-      await closeAsyncGenerator(gen)
-      return next
-    }
-
-    return finishEither(next.value)
   } finally {
-    abort.cleanup()
+    await closeScope(scope)
   }
 }
 
-function createAbortState(signal: AbortSignal): AbortState {
-  const { promise, resolve } = Promise.withResolvers<Left<Aborted>>()
-  const result = () => left(aborted(signal.reason))
-  const onAbort = () => resolve(result())
+type ScopeStep<Eff, Ret> = {
+  readonly result: IteratorResult<Eff, Ret> | Left<any>
+  readonly pending?: Promise<IteratorResult<Eff, Ret>>
+}
 
-  if (signal.aborted) onAbort()
-  else signal.addEventListener('abort', onAbort, { once: true })
+type ScopeRuntime = {
+  readonly failure: Promise<Left<any>>
+  readonly signal: ScopeSignal
+  readonly enableFork: () => void
+  readonly close: () => Promise<void>
+  readonly fail: (failure: Left<any>, reason?: unknown) => void
+  readonly currentFailure: () => Left<any> | undefined
+}
 
+type ScopedTaskHandle<E, A> = {
+  readonly promise: Promise<Exit<E, A>>
+  readonly abort: (reason?: unknown) => void
+}
+
+type ChildScopeSignal = {
+  readonly signal: ScopeSignal
+  readonly abort: (reason?: unknown) => void
+  readonly cleanup: () => void
+}
+
+type ScopeSource = ScopeRuntime | RaiseContextHandle
+
+type RaiseContextHandle = {
+  readonly context: RaiseContext
+  readonly enableFork: () => void
+  readonly ensureScope: () => ScopeRuntime
+  readonly peekScope: () => ScopeRuntime | undefined
+}
+
+function createScopeRuntime(parent?: AbortSignal): ScopeRuntime {
+  const controller = new AbortController()
+  const { promise, resolve } = Promise.withResolvers<Left<any>>()
+  const children = new Set<Promise<Either<any, any>>>()
+  let failure: Left<any> | undefined
+  let closed = false
+  let closing = false
+  let forkEnabled = false
+  let parentCleanup: (() => void) | undefined
+
+  const fail = (nextFailure: Left<any>, reason = nextFailure.error): void => {
+    if (failure !== undefined || closing) return
+    failure = nextFailure
+    resolve(nextFailure)
+    if (!controller.signal.aborted) controller.abort(reason)
+  }
+
+  const onParentAbort = (): void => {
+    fail(left(aborted(parent?.reason)), parent?.reason)
+  }
+
+  if (parent !== undefined) {
+    if (parent.aborted) onParentAbort()
+    else {
+      parent.addEventListener('abort', onParentAbort, { once: true })
+      parentCleanup = () => parent.removeEventListener('abort', onParentAbort)
+    }
+  }
+
+  const signal = controller.signal as ScopeSignal
+  Object.defineProperties(signal, {
+    fork: {
+      configurable: true,
+      // oxlint-disable-next-line typescript/promise-function-async
+      value: <E, A>(task: ScopeTask<E, A>) => forkScopedTask(scope, task),
+    },
+    all: {
+      configurable: true,
+      // oxlint-disable-next-line typescript/promise-function-async
+      value: <const T extends readonly ScopeTask<any, any>[]>(tasks: T) =>
+        allScopedTasks(scope, tasks),
+    },
+    race: {
+      configurable: true,
+      // oxlint-disable-next-line typescript/promise-function-async
+      value: <const T extends readonly ScopeTask<any, any>[]>(tasks: T) =>
+        raceScopedTasks(scope, tasks),
+    },
+  })
+
+  const scope = {
+    failure: promise,
+    signal,
+    enableFork() {
+      forkEnabled = true
+    },
+    close: async () => {
+      if (closed) return
+      closed = true
+      closing = true
+      parentCleanup?.()
+      if (!controller.signal.aborted) {
+        controller.abort(new DOMException('Scope closed', 'AbortError'))
+      }
+      if (children.size > 0) await Promise.allSettled(children)
+    },
+    fail,
+    currentFailure: () => failure,
+  } as const satisfies ScopeRuntime
+
+  // oxlint-disable-next-line typescript/promise-function-async
+  function forkScopedTask<E, A>(
+    owner: ScopeRuntime,
+    task: ScopeTask<E, A>,
+  ): Promise<Exit<E, A>> {
+    ensureForkEnabled('fork')
+    const existing = failure
+    if (existing !== undefined) {
+      return Promise.resolve(existing as Exit<E, A>)
+    }
+
+    const child = startScopedTask(owner, task)
+    return child.promise.then((result) => {
+      if (result._tag === 'Left') owner.fail(result)
+      return result
+    })
+  }
+
+  // oxlint-disable-next-line typescript/promise-function-async
+  function allScopedTasks<const T extends readonly ScopeTask<any, any>[]>(
+    owner: ScopeRuntime,
+    tasks: T,
+  ): Promise<Exit<any, any[]>> {
+    ensureForkEnabled('all')
+
+    const existing = failure
+    if (existing !== undefined) return Promise.resolve(existing)
+    if (tasks.length === 0) return Promise.resolve(right([]))
+
+    const handles: (ScopedTaskHandle<any, any> | undefined)[] = []
+    handles.length = tasks.length
+    const values: any[] = []
+    values.length = tasks.length
+
+    let remaining = tasks.length
+    let settled = false
+
+    return new Promise((resolve) => {
+      for (let index = 0; index < tasks.length; index++) {
+        const handle = startScopedTask(
+          owner,
+          tasks[index] as ScopeTask<any, any>,
+        )
+        handles[index] = handle
+
+        void handle.promise.then((result) => {
+          if (settled) return
+
+          if (result._tag === 'Left') {
+            settled = true
+            handles[index] = undefined
+            owner.fail(result)
+            abortScopedTasks(handles, result.error, index)
+            resolve(result)
+            return
+          }
+
+          handles[index] = undefined
+          values[index] = result.value
+          remaining--
+          if (remaining === 0) {
+            settled = true
+            resolve(right(values))
+          }
+        })
+      }
+    })
+  }
+
+  // oxlint-disable-next-line typescript/promise-function-async
+  function raceScopedTasks<const T extends readonly ScopeTask<any, any>[]>(
+    owner: ScopeRuntime,
+    tasks: T,
+  ): Promise<Exit<any, any>> {
+    ensureForkEnabled('race')
+
+    const existing = failure
+    if (existing !== undefined) return Promise.resolve(existing)
+    if (tasks.length === 0) {
+      const result = toRejectedLeft(
+        new TypeError('signal.race() requires at least one task'),
+      )
+      owner.fail(result)
+      return Promise.resolve(result)
+    }
+
+    const handles: (ScopedTaskHandle<any, any> | undefined)[] = []
+    handles.length = tasks.length
+
+    let settled = false
+
+    return new Promise((resolve) => {
+      for (let index = 0; index < tasks.length; index++) {
+        const handle = startScopedTask(
+          owner,
+          tasks[index] as ScopeTask<any, any>,
+        )
+        handles[index] = handle
+
+        void handle.promise.then((result) => {
+          if (settled) return
+          settled = true
+          handles[index] = undefined
+
+          if (result._tag === 'Left') owner.fail(result)
+          abortScopedTasks(
+            handles,
+            result._tag === 'Left' ? result.error : undefined,
+            index,
+          )
+          resolve(result)
+        })
+      }
+    })
+  }
+
+  function startScopedTask<E, A>(
+    owner: ScopeRuntime,
+    task: ScopeTask<E, A>,
+  ): ScopedTaskHandle<E, A> {
+    if (closed) {
+      const result = left(aborted(controller.signal.reason)) as Exit<E, A>
+      return {
+        promise: Promise.resolve(result),
+        abort: () => {},
+      }
+    }
+
+    const child = createChildScopeSignal(owner.signal)
+    const childPromise = Promise.try(() => task(child.signal))
+      .then((result) => result as Exit<E, A>)
+      .catch((cause) => toRejectedLeft(cause) as Exit<E, A>)
+
+    children.add(childPromise)
+    void childPromise.then(
+      () => {
+        children.delete(childPromise)
+        child.cleanup()
+      },
+      () => {
+        children.delete(childPromise)
+        child.cleanup()
+      },
+    )
+
+    return {
+      promise: childPromise,
+      abort: child.abort,
+    }
+  }
+
+  function ensureForkEnabled(method: 'fork' | 'all' | 'race'): void {
+    if (!forkEnabled) {
+      throw new TypeError(
+        `signal.${method}() is only available in async either`,
+      )
+    }
+  }
+
+  return scope
+}
+
+function abortScopedTasks(
+  handles: readonly (ScopedTaskHandle<any, any> | undefined)[],
+  reason: unknown,
+  except?: number,
+): void {
+  for (let index = 0; index < handles.length; index++) {
+    if (index !== except) handles[index]?.abort(reason)
+  }
+}
+
+function createChildScopeSignal(parent: ScopeSignal): ChildScopeSignal {
+  const controller = new AbortController()
+  let parentCleanup: (() => void) | undefined
+
+  const onParentAbort = (): void => {
+    controller.abort(parent.reason)
+  }
+
+  if (parent.aborted) controller.abort(parent.reason)
+  else {
+    parent.addEventListener('abort', onParentAbort, { once: true })
+    parentCleanup = () => parent.removeEventListener('abort', onParentAbort)
+  }
+
+  const signal = controller.signal as ScopeSignal
+  Object.defineProperties(signal, {
+    fork: {
+      configurable: true,
+      value: parent.fork.bind(parent),
+    },
+    all: {
+      configurable: true,
+      value: parent.all.bind(parent),
+    },
+    race: {
+      configurable: true,
+      value: parent.race.bind(parent),
+    },
+  })
   return {
     signal,
-    promise,
-    result,
-    cleanup: () => signal.removeEventListener('abort', onAbort),
+    abort(reason?: unknown) {
+      if (!controller.signal.aborted) controller.abort(reason)
+    },
+    cleanup() {
+      parentCleanup?.()
+    },
   }
 }
 
-async function nextOrAbort<Eff extends Either<any, any>, Ret>(
+function createRaiseContext(parent?: AbortSignal): RaiseContextHandle {
+  let scope: ScopeRuntime | undefined
+  let forkEnabled = false
+  const ensureScope = (): ScopeRuntime => {
+    if (scope === undefined) {
+      scope = createScopeRuntime(parent)
+      if (forkEnabled) scope.enableFork()
+    }
+    return scope
+  }
+
+  // oxlint-disable-next-line typescript/promise-function-async
+  const context = ((x: unknown) => raise(x as never)) as RaiseContext
+  Object.defineProperties(context, {
+    raise: { configurable: true, get: () => raise },
+    signal: { configurable: true, get: () => ensureScope().signal },
+  })
+
+  return {
+    context,
+    enableFork() {
+      forkEnabled = true
+      scope?.enableFork()
+    },
+    ensureScope,
+    peekScope: () => scope,
+  }
+}
+
+async function nextOrScope<Eff extends Either<any, any>, Ret>(
   gen: AsyncGenerator<Eff, Ret, unknown>,
   value: unknown,
   hasValue: boolean,
-  abort: AbortState,
-): Promise<AbortableNext<Eff, Ret>> {
-  if (abort.signal.aborted) return abort.result()
+  source: ScopeSource | undefined,
+): Promise<ScopeStep<Eff, Ret>> {
+  const scope = peekScope(source)
+  const failure = scope?.currentFailure()
+  if (failure !== undefined) return { result: failure }
 
   const next = hasValue ? gen.next(value) : gen.next()
-  return Promise.race([next, abort.promise])
+  const currentScope = peekScope(source)
+  if (currentScope !== undefined) {
+    const result = await Promise.race([next, currentScope.failure])
+    return isScopeFailure(result) ? { result, pending: next } : { result }
+  }
+
+  return { result: await next }
 }
 
-function isAbortResult<Eff, Ret>(
-  result: AbortableNext<Eff, Ret>,
-): result is Left<Aborted> {
+function isScopeFailure<Eff, Ret>(
+  result: IteratorResult<Eff, Ret> | Left<any>,
+): result is Left<any> {
   return !('done' in result)
+}
+
+function isRaiseContextHandle(
+  source: ScopeSource,
+): source is RaiseContextHandle {
+  return 'context' in source
+}
+
+function peekScope(source: ScopeSource | undefined): ScopeRuntime | undefined {
+  if (source === undefined) return undefined
+  return isRaiseContextHandle(source) ? source.peekScope() : source
+}
+
+async function closeScope(source: ScopeSource | undefined): Promise<void> {
+  await peekScope(source)?.close()
 }
 
 function closeSyncGenerator(gen: Generator<any, any, unknown>): void {
@@ -136,7 +471,9 @@ function closeSyncGenerator(gen: Generator<any, any, unknown>): void {
 
 async function closeAsyncGenerator(
   gen: AsyncGenerator<any, any, unknown>,
+  pending?: Promise<IteratorResult<any, any>>,
 ): Promise<void> {
+  if (pending !== undefined) await pending
   await gen.return(undefined)
 }
 
@@ -147,7 +484,9 @@ async function closeAsyncGenerator(
  * Accepts both synchronous and asynchronous generators. When an async generator
  * is provided the return type is `Promise<Either<...>>`.
  *
- * The `raise` parameter injected into the generator serves two roles:
+ * The injected {@link RaiseContext} is callable like `raise` and can also be
+ * destructured as `{ raise, signal }` in async flows. The callable side serves
+ * two roles:
  * - `return raise(error)`: short-circuits with `Left<E>`. TypeScript narrows
  *   control flow correctly — code after the `return` is unreachable, and
  *   guarded values (e.g. `if (!x) return raise(e)`) are narrowed on the happy
@@ -156,7 +495,11 @@ async function closeAsyncGenerator(
  *   exceptions and rejected promises into `Left<Rejected>` so they can be
  *   short-circuited safely.
  *
- * @param fn - A function that receives `raise` and returns a generator.
+ * In async `either`, touching `context.signal` lazily creates a scoped
+ * `AbortSignal`; `signal.fork(task)` starts child work that is aborted when the
+ * enclosing generator finishes, short-circuits, throws, or is cancelled.
+ *
+ * @param fn - A function that receives a `RaiseContext` and returns a generator.
  *
  * @example
  * ```ts
@@ -168,21 +511,21 @@ async function closeAsyncGenerator(
  * ```
  */
 export function either<Eff extends Either<any, any>, Ret>(
-  fn: (raise: Raise) => Generator<Eff, Ret>,
+  fn: (raise: RaiseContext) => Generator<Eff, Ret>,
 ): Either<
   InferE<Eff> | InferE<Extract<Ret, Left<any>>>,
   Exclude<Ret, Left<any>>
 >
 
 export function either<Eff extends Either<any, any>, Ret>(
-  fn: (raise: Raise) => AsyncGenerator<Eff, Ret>,
+  fn: (raise: RaiseContext) => AsyncGenerator<Eff, Ret>,
 ): Promise<
   Either<InferE<Eff> | InferE<Extract<Ret, Left<any>>>, Exclude<Ret, Left<any>>>
 >
 
 export function either<Eff extends Either<any, any>, Ret>(
   signal: AbortSignal,
-  fn: (raise: AbortRaise, signal: AbortSignal) => AsyncGenerator<Eff, Ret>,
+  fn: (raise: AbortRaise, signal: ScopeSignal) => AsyncGenerator<Eff, Ret>,
 ): Promise<
   Either<
     Aborted | InferE<Eff> | InferE<Extract<Ret, Left<any>>>,
@@ -194,43 +537,54 @@ export function either<Eff extends Either<any, any>, Ret>(
   signalOrFn:
     | AbortSignal
     | ((
-        raise: Raise,
+        raise: RaiseContext,
       ) => Generator<Eff, Ret, unknown> | AsyncGenerator<Eff, Ret, unknown>),
   fn?: (
     raise: AbortRaise,
-    signal: AbortSignal,
+    signal: ScopeSignal,
   ) => AsyncGenerator<Eff, Ret, unknown>,
 ): Either<any, any> | Promise<Either<any, any>> {
   if (typeof signalOrFn !== 'function') {
-    const gen = fn?.(raiseWithSignal(signalOrFn), signalOrFn)
+    const context = createRaiseContext(signalOrFn)
+    const scope = context.ensureScope()
+    scope.enableFork()
+    const gen = fn?.(context.context, scope.signal)
     if (gen === undefined) {
       throw new TypeError('either(signal, fn) requires an async generator')
     }
-    return eitherAsyncAbortable(gen, signalOrFn)
+    return eitherAsync(gen, scope)
   }
 
-  const gen = signalOrFn(raise)
+  const context = signalOrFn.length === 0 ? undefined : createRaiseContext()
+  const gen =
+    context === undefined
+      ? (
+          signalOrFn as () =>
+            | Generator<Eff, Ret, unknown>
+            | AsyncGenerator<Eff, Ret, unknown>
+        )()
+      : signalOrFn(context.context)
   if (Symbol.asyncIterator in gen) {
-    return eitherAsync(gen)
+    context?.enableFork()
+    return eitherAsync(gen, context)
   }
 
-  const next = gen.next()
-  if (!next.done) {
-    const eff = next.value
-    if (eff._tag === 'Left') {
-      closeSyncGenerator(gen)
-      return eff
+  try {
+    const next = gen.next()
+    if (!next.done) {
+      const eff = next.value
+      if (eff._tag === 'Left') {
+        closeSyncGenerator(gen)
+        return eff
+      }
+      return eitherSyncContinue(gen, eff.value)
     }
-    return eitherSyncContinue(gen, eff.value)
+
+    return finishEither(next.value)
+  } finally {
+    const scope = context?.peekScope()
+    if (scope !== undefined) void scope.close()
   }
-
-  return finishEither(next.value)
-}
-
-function raiseWithSignal(signal: AbortSignal): AbortRaise {
-  // eslint-disable-next-line promise-function-async
-  const scopedRaise = ((x: unknown) => raise(x as never)) as Raise
-  return Object.assign(scopedRaise, { signal })
 }
 
 /**

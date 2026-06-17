@@ -1,5 +1,6 @@
 import { afterAll, bench, describe } from 'vitest'
 
+import { cleanupBenchFixtures, importBenchFixture } from './bench-fixture.ts'
 import { BENCH_OPTS } from './bench-options.ts'
 import yeet from './unplugin.ts'
 
@@ -231,16 +232,13 @@ const optimized = await importBenchModule(
 )
 const benchSink = { value: undefined as unknown }
 
-afterAll(() => {
+afterAll(async () => {
   void benchSink.value
+  await cleanupBenchFixtures()
 })
 
-function moduleUrl(code: string): string {
-  return `data:text/javascript;base64,${Buffer.from(code).toString('base64')}`
-}
-
 async function importBenchModule(code: string): Promise<BenchModule> {
-  return (await import(moduleUrl(code))) as BenchModule
+  return importBenchFixture<BenchModule>(code, 'index')
 }
 
 async function transformWithPlugin(code: string): Promise<string> {

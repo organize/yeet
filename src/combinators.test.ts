@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { type Aborted, type Rejected } from './async.ts'
+import { type Aborted, type Exit, type Rejected } from './async.ts'
 import {
   either,
   capture,
@@ -28,7 +28,7 @@ type User = { id: string; name: string; active: boolean }
 type Order = { id: string; userId: string }
 
 const getUser = (id: string) =>
-  // eslint-disable-next-line require-yield
+  // oxlint-disable-next-line require-yield
   either(function* (raise) {
     if (id !== '1') return raise('UserNotFound' as const)
     return { id, name: 'Axel', active: true } satisfies User
@@ -320,6 +320,297 @@ describe('either (async)', () => {
   })
 })
 
+describe('either scoped signal', () => {
+  it('keeps raise destructuring callable in sync either', () => {
+    const result = either(function* ({ raise }) {
+      yield* right(undefined)
+      return raise('Nope' as const)
+    })
+
+    expectLeft(result, 'Nope')
+  })
+
+  it('runs forked async tasks inside a non-abortable either scope', async () => {
+    const resultPromise = either(async function* ({ signal }) {
+      const user = signal.fork(async () => {
+        await Promise.resolve()
+        return right({ id: 'user-1' as const })
+      })
+      const settings = signal.fork(() => right({ theme: 'dark' as const }))
+
+      return {
+        user: yield* await user,
+        settings: yield* await settings,
+      }
+    })
+    const typed: Promise<
+      Either<
+        Rejected | Aborted,
+        {
+          user: { id: 'user-1' }
+          settings: { theme: 'dark' }
+        }
+      >
+    > = resultPromise
+
+    expect(typed).toBe(resultPromise)
+    expectRight(await resultPromise, {
+      user: { id: 'user-1' },
+      settings: { theme: 'dark' },
+    })
+  })
+
+  it('cancels sibling tasks when a fork returns Left', async () => {
+    const events: string[] = []
+
+    const result = await either(async function* ({ signal }) {
+      const slow = signal.fork(async (child) => {
+        events.push('slow:start')
+        const result = await abortAsLeft(child, 'SlowAborted' as const)
+        events.push('slow:aborted')
+        return result
+      })
+
+      void signal.fork(() => {
+        events.push('fail')
+        return left('Boom' as const)
+      })
+
+      yield* await slow
+      return 'done' as const
+    })
+
+    expectLeft(result as Either<unknown, unknown>, 'Boom')
+    expect(events).toEqual(['slow:start', 'fail', 'slow:aborted'])
+  })
+
+  it('runs signal.all concurrently and preserves tuple order', async () => {
+    const first = deferred<Either<'FirstFailed', number>>()
+    const second = deferred<Either<'SecondFailed', string>>()
+
+    const resultPromise = either(async function* ({ signal }) {
+      return yield* await signal.all([
+        async () => first.promise,
+        async () => second.promise,
+      ] as const)
+    })
+    const typed: Promise<
+      Exit<'FirstFailed' | 'SecondFailed', [number, string]>
+    > = resultPromise
+
+    expect(typed).toBe(resultPromise)
+    second.resolve(right('two'))
+    first.resolve(right(1))
+
+    expectRight(await resultPromise, [1, 'two'])
+  })
+
+  it('cancels sibling tasks when signal.all sees a Left', async () => {
+    const events: string[] = []
+
+    const result = await either(async function* ({ signal }) {
+      return yield* await signal.all([
+        async (child) => {
+          events.push('slow:start')
+          const result = await abortAsLeft(child, 'SlowAborted' as const)
+          events.push('slow:aborted')
+          return result
+        },
+        () => {
+          events.push('fail')
+          return left('Boom' as const)
+        },
+      ] as const)
+    })
+
+    expectLeft(result as Either<unknown, unknown>, 'Boom')
+    expect(events).toEqual(['slow:start', 'fail', 'slow:aborted'])
+  })
+
+  it('lets signal.race return the first Right without poisoning the scope', async () => {
+    const events: string[] = []
+
+    const result = await either(async function* ({ signal }) {
+      const raced = yield* await signal.race([
+        async (child) => {
+          events.push('slow:start')
+          const result = await abortAsLeft(child, 'SlowAborted' as const)
+          events.push('slow:aborted')
+          return result
+        },
+        async () => {
+          events.push('fast')
+          await Promise.resolve()
+          return right('fast' as const)
+        },
+      ] as const)
+
+      const after = yield* right('after' as const)
+      return [raced, after] as const
+    })
+
+    expectRight(result, ['fast', 'after'])
+    expect(events).toEqual(['slow:start', 'fast', 'slow:aborted'])
+  })
+
+  it('lets signal.race return the first Left and cancel losers', async () => {
+    const events: string[] = []
+
+    const result = await either(async function* ({ signal }) {
+      return yield* await signal.race([
+        async (child) => {
+          events.push('slow:start')
+          const result = await abortAsLeft(child, 'SlowAborted' as const)
+          events.push('slow:aborted')
+          return result
+        },
+        async () => {
+          events.push('fail')
+          await Promise.resolve()
+          return left('RaceFailed' as const)
+        },
+      ] as const)
+    })
+
+    expectLeft(result as Either<unknown, unknown>, 'RaceFailed')
+    expect(events).toEqual(['slow:start', 'fail', 'slow:aborted'])
+  })
+
+  it('returns Rejected for an empty signal.race', async () => {
+    const result = await either(async function* ({ signal }) {
+      yield* await signal.race([] as const)
+      return 'done' as const
+    })
+
+    expect(result._tag).toBe('Left')
+    if (result._tag !== 'Left') return
+    const error = result.error as Rejected
+    expect(error._tag).toBe('Rejected')
+    expect(error.cause).toBeInstanceOf(TypeError)
+    expect((error.cause as Error).message).toBe(
+      'signal.race() requires at least one task',
+    )
+  })
+
+  it('captures rejected forked tasks and cancels siblings', async () => {
+    const cause = new Error('fork exploded')
+    const events: string[] = []
+
+    const result = await either(async function* ({ signal }) {
+      const slow = signal.fork(async (child) => {
+        events.push('slow:start')
+        const result = await abortAsLeft(child, 'SlowAborted' as const)
+        events.push('slow:aborted')
+        return result
+      })
+
+      void signal.fork(async () => {
+        await Promise.resolve()
+        throw cause
+      })
+
+      yield* await slow
+      return 'done' as const
+    })
+
+    expect(result._tag).toBe('Left')
+    if (result._tag !== 'Left') return
+    const error = result.error as Rejected
+    expect(error._tag).toBe('Rejected')
+    expect(error.cause).toBe(cause)
+    expect(events).toEqual(['slow:start', 'slow:aborted'])
+  })
+
+  it('waits for outstanding forked tasks to close on normal return', async () => {
+    const events: string[] = []
+
+    const result = await either(async function* ({ signal }) {
+      void signal.fork(async (child) => {
+        events.push('child:start')
+        const result = await abortAsLeft(child, 'ScopeClosed' as const)
+        events.push('child:closed')
+        return result
+      })
+
+      yield* right(undefined)
+      return 'done' as const
+    })
+
+    expectRight(result, 'done')
+    expect(events).toEqual(['child:start', 'child:closed'])
+  })
+
+  it('passes an enriched child signal for abortable either scopes', async () => {
+    const controller = new AbortController()
+    let injected: AbortSignal | undefined
+    let secondArg: AbortSignal | undefined
+
+    const result = await either(
+      controller.signal,
+      // oxlint-disable-next-line require-yield
+      async function* ({ signal }, second) {
+        injected = signal
+        secondArg = second
+        return 'ok' as const
+      },
+    )
+
+    expectRight(result, 'ok')
+    expect(injected).toBe(secondArg)
+    expect(injected).not.toBe(controller.signal)
+    expect(injected).toBeInstanceOf(AbortSignal)
+    expect(typeof (injected as { fork?: unknown } | undefined)?.fork).toBe(
+      'function',
+    )
+  })
+
+  it('lets a parent abort cancel forked child work', async () => {
+    const controller = new AbortController()
+
+    const resultPromise = either(
+      controller.signal,
+      async function* ({ signal }) {
+        const child = signal.fork(async (childSignal) =>
+          abortAsLeft(childSignal, 'ChildAborted' as const),
+        )
+
+        controller.abort('Stop')
+        yield* await child
+        return 'done' as const
+      },
+    )
+
+    const result = await resultPromise
+
+    expectLeft(result, { _tag: 'Aborted', reason: 'Stop' })
+  })
+
+  it('does not enable signal.fork inside sync either', () => {
+    expect(() =>
+      either(function* ({ signal }) {
+        void signal.fork(() => right(1))
+        return yield* right(1)
+      }),
+    ).toThrow('signal.fork() is only available in async either')
+  })
+
+  it('does not enable signal.all or signal.race inside sync either', () => {
+    expect(() =>
+      either(function* ({ signal }) {
+        void signal.all([])
+        return yield* right(1)
+      }),
+    ).toThrow('signal.all() is only available in async either')
+
+    expect(() =>
+      either(function* ({ signal }) {
+        void signal.race([])
+        return yield* right(1)
+      }),
+    ).toThrow('signal.race() is only available in async either')
+  })
+})
+
 describe('either cleanup and thrown errors', () => {
   it('runs finally when a sync Either short-circuits', () => {
     const events: string[] = []
@@ -415,7 +706,7 @@ describe('either cleanup and thrown errors', () => {
           yield* left('Stop' as const)
         } finally {
           events.push('finally')
-          // eslint-disable-next-line no-unsafe-finally
+          // oxlint-disable-next-line no-unsafe-finally
           throw cause
         }
       })

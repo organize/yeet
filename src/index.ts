@@ -21,15 +21,39 @@ export {
 
 export type {
   EitherSchemaOptions,
+  ExitErrorSchemaOptions,
+  ExitSchemaOptions,
   SerializedEitherSchema,
   EitherSchema,
+  ExitErrorSchema,
+  SerializedExitSchema,
+  ExitSchema,
 } from './schema.ts'
-export { serializedEitherSchema, eitherSchema } from './schema.ts'
+export {
+  serializedEitherSchema,
+  eitherSchema,
+  exitErrorSchema,
+  serializedExitSchema,
+  exitSchema,
+} from './schema.ts'
 
 export type { Step, Strategy } from './fold.ts'
 export { fold, foldAsync } from './fold.ts'
 
-export type { Aborted, AbortRaise, Rejected, Raise } from './async.ts'
+export type {
+  Aborted,
+  AbortRaise,
+  Exit,
+  ExitError,
+  RaiseContext,
+  Rejected,
+  Raise,
+  ScopeSignal,
+  ScopeTask,
+  ScopeTaskError,
+  ScopeTaskValue,
+  ScopeTaskValues,
+} from './async.ts'
 export { aborted, rejected, raise } from './async.ts'
 
 export type {

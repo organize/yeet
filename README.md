@@ -261,13 +261,13 @@ Pass an `AbortSignal` as the first argument to make an async `either` flow
 cooperatively cancellable:
 
 ```ts
-const result = await either(signal, async function* (raise) {
+const result = await either(signal, async function* ({ raise, signal }) {
   using conn = yield* openConn()
 
-  const user = yield* await fetchUser(id, raise.signal)
+  const user = yield* await fetchUser(id, signal)
   const avatar = yield* await raise(
     fetch(user.avatarUrl, {
-      signal: raise.signal,
+      signal,
     }),
   )
 
@@ -281,14 +281,35 @@ const result = await either(signal, async function* (raise) {
 // >
 ```
 
-In abortable flows, the first callback parameter is an `AbortRaise`:
+The first callback parameter is a `RaiseContext`: still callable like `raise`,
+but also destructurable when you want the signal without the awkward little
+shadow puppet of `raise.signal` everywhere.
 
 ```ts
-type AbortRaise = Raise & { readonly signal: AbortSignal }
+type ScopeSignal = AbortSignal & {
+  fork<E, A>(
+    task: (signal: ScopeSignal) => Either<E, A> | PromiseLike<Either<E, A>>,
+  ): Promise<Exit<E, A>>
+  all<const T extends readonly ScopeTask<any, any>[]>(
+    tasks: T,
+  ): Promise<Exit<ScopeTaskError<T[number]>, ScopeTaskValues<T>>>
+  race<const T extends readonly ScopeTask<any, any>[]>(
+    tasks: T,
+  ): Promise<Exit<ScopeTaskError<T[number]>, ScopeTaskValue<T[number]>>>
+}
+
+type Exit<E, A> = Either<E | Rejected | Aborted, A>
+
+type RaiseContext = Raise & {
+  readonly raise: Raise
+  readonly signal: ScopeSignal
+}
+
+type AbortRaise = RaiseContext
 ```
 
-Use `raise.signal` when you also need `raise`. If you only need the signal,
-destructure the first parameter:
+Use `async function* ({ raise, signal })` when you need both. If you only need
+the signal, destructure only that:
 
 ```ts
 const result = await either(signal, async function* ({ signal }) {
@@ -296,9 +317,86 @@ const result = await either(signal, async function* ({ signal }) {
 })
 ```
 
-For compatibility, yeet also passes the same signal as the callback's second
-argument: `async function* (raise, signal) { ... }`. Prefer `raise.signal` or
-`({ signal })` in new code so the source of the signal has one obvious home.
+If you prefer the old single-name style, `async function* (raise) { ... }` still
+works and `raise.signal` is there. For compatibility, yeet also passes the same
+enriched child signal as the callback's second argument:
+`async function* (raise, signal) { ... }`. Prefer destructuring in new examples
+so the source of the signal has one obvious home.
+
+### Scoped Forks
+
+The injected signal exists even when you do not pass a parent signal. Touching
+`{ signal }` inside an async `either` lazily opens a tiny scope. From there,
+`signal.fork(task)` starts child work under that scope and gives the task its own
+child `ScopeSignal`.
+
+```ts
+const result = await either(async function* ({ signal }) {
+  const user = signal.fork((signal) => fetchUser(id, signal))
+  const settings = signal.fork((signal) => fetchSettings(id, signal))
+
+  return {
+    user: yield* await user,
+    settings: yield* await settings,
+  }
+})
+
+// inferred:
+// Promise<
+//   Either<
+//     Aborted | Rejected | FetchUserError | FetchSettingsError,
+//     { user: User; settings: Settings }
+//   >
+// >
+```
+
+If any fork returns a `Left` or rejects, yeet aborts the scope signal, sibling
+tasks see `signal.aborted`, and the outer `either` returns that failure as data.
+On normal return, short-circuit, throw, or parent abort, outstanding forks are
+aborted and awaited before the result settles. The spell is small, but it is a
+real step toward structured concurrency: children do not wander off after the
+generator is done.
+
+For the cleanest inferred error unions, `yield* await` the fork promises you
+care about, as above. TypeScript cannot see the error type of a detached fork
+that is started and never referenced again; JavaScript may be magical, but it is
+not yet clairvoyant.
+
+When the work is naturally a batch, use `signal.all`. It starts every task with
+a child signal, returns values in input order, and cancels siblings on the first
+`Left` or rejection.
+
+```ts
+const result = await either(async function* ({ signal }) {
+  const [user, settings] = yield* await signal.all([
+    (signal) => fetchUser(id, signal),
+    (signal) => fetchSettings(id, signal),
+  ] as const)
+
+  return { user, settings }
+})
+
+// inferred:
+// Promise<Either<Aborted | Rejected | FetchUserError | FetchSettingsError, { user: User; settings: Settings }>>
+```
+
+Use `signal.race` when the first typed outcome wins. A winning `Right` aborts
+the losers without poisoning the enclosing `either`; a winning `Left` aborts the
+losers and short-circuits as usual.
+
+```ts
+const result = await either(async function* ({ signal }) {
+  const profile = yield* await signal.race([
+    (signal) => fetchFromEdgeCache(id, signal),
+    (signal) => fetchFromOrigin(id, signal),
+  ] as const)
+
+  return profile
+})
+
+// inferred:
+// Promise<Either<Aborted | Rejected | EdgeError | OriginError, Profile>>
+```
 
 When the signal aborts, yeet returns `Left<Aborted>` and calls `gen.return()`,
 so `finally`, `using`, and `await using` cleanup get their turn.
@@ -429,10 +527,10 @@ helpers. They allocate an `Either` per parsed item because that is what makes
 import { either } from '@big-time/yeet'
 import { sse } from '@big-time/yeet/stream'
 
-const result = await either(signal, async function* (raise) {
-  const res = yield* await raise(fetch(url, { signal: raise.signal }))
+const result = await either(signal, async function* ({ raise, signal }) {
+  const res = yield* await raise(fetch(url, { signal }))
 
-  for await (const next of sse(res.body, { signal: raise.signal })) {
+  for await (const next of sse(res.body, { signal })) {
     const event = yield* next
 
     if (event.event === 'error') {
@@ -820,6 +918,31 @@ if (hydrated.issues === undefined) {
 Nested schemas are optional. Without them, `yeet` validates the outer
 `{ _tag, error | value }` envelope and leaves the payload as `unknown`.
 
+Scoped async work has a small extra vocabulary: domain errors, `Aborted`, and
+`Rejected`. Use `exitErrorSchema`, `serializedExitSchema`, and `exitSchema` when
+you want that whole outcome to be a portable value.
+
+```ts
+import { exitSchema, serializedExitSchema } from '@big-time/yeet'
+
+const SerializedUserExit = serializedExitSchema({
+  error: ApiError,
+  value: User,
+})
+// inferred: SerializedExitSchema<ApiError, User>
+
+const HydratedUserExit = exitSchema({
+  error: ApiError,
+  value: User,
+})
+// inferred: ExitSchema<ApiError, User>
+// validates Left<ApiError | Aborted | Rejected> | Right<User>
+```
+
+If no domain `error` schema is provided, the Exit schemas accept only yeet's
+built-in `Aborted` and `Rejected` error payloads. Add `reason` or `cause` schemas
+when those payloads need tighter validation too.
+
 ### Exporting JSON Schema
 
 Standard Schema and Standard JSON Schema are separate interfaces. If a nested
@@ -964,8 +1087,8 @@ It lowers these proven shapes:
 - direct `yield* check(someEither())` steps in `validate`
 - direct `yield someEither` attempts in `firstOf` and `collect`
 
-On a local `bun run bench:quick`-style run, the transform shook out roughly like
-this. The exact numbers will drift with hardware, runtime, warmup, and the
+On a local `bun run bench:quick:node`-style run, the transform shook out roughly
+like this. The exact numbers will drift with hardware, runtime, warmup, and the
 JIT's morning mood, but the shape is the useful part:
 
 | Shape                                           | Rough win |
@@ -1024,14 +1147,14 @@ the keys to the old truck.
 
 ### Generator Runners
 
-| API                       | Description                                                              |
-| ------------------------- | ------------------------------------------------------------------------ |
-| `either(fn)`              | Short-circuiting sync or async generator runner                          |
-| `either(signal, asyncFn)` | Abort-aware async runner; `asyncFn` receives `AbortRaise` and the signal |
-| `capture(either)`         | Preserve a `Left` as data inside `either`                                |
-| `validate(fn)`            | Accumulate every yielded error                                           |
-| `firstOf(fn)`             | Return the first yielded `Right`                                         |
-| `collect(fn)`             | Partition yielded values into errors and values                          |
+| API                       | Description                                                        |
+| ------------------------- | ------------------------------------------------------------------ |
+| `either(fn)`              | Short-circuiting sync or async generator runner                    |
+| `either(signal, asyncFn)` | Abort-aware async runner; `asyncFn` receives a scoped `AbortRaise` |
+| `capture(either)`         | Preserve a `Left` as data inside `either`                          |
+| `validate(fn)`            | Accumulate every yielded error                                     |
+| `firstOf(fn)`             | Return the first yielded `Right`                                   |
+| `collect(fn)`             | Partition yielded values into errors and values                    |
 
 ### Concurrency
 
@@ -1039,6 +1162,9 @@ the keys to the old truck.
 | -------------------- | -------------------------------------------------------------------- |
 | `all(inputs)`        | Run independent inputs concurrently and short-circuit by input order |
 | `collectAll(inputs)` | Run independent inputs concurrently and partition all outcomes       |
+| `signal.fork(task)`  | Start child work inside the current async `either` scope             |
+| `signal.all(tasks)`  | Run signal-aware child tasks and cancel siblings on first failure    |
+| `signal.race(tasks)` | Return the first child outcome and abort losing tasks                |
 
 ### Guards And Async Helpers
 
@@ -1060,6 +1186,9 @@ the keys to the old truck.
 | `isSerializedEither(value)`        | Detect yeet's strict JSON envelope                    |
 | `serializedEitherSchema(options?)` | Standard Schema validator for serialized JSON         |
 | `eitherSchema(options?)`           | Standard Schema validator that hydrates to `Either`   |
+| `exitErrorSchema(options?)`        | Standard Schema validator for scoped Exit errors      |
+| `serializedExitSchema(options?)`   | Standard Schema validator for serialized `Exit` JSON  |
+| `exitSchema(options?)`             | Standard Schema validator that hydrates to `Exit`     |
 
 ### Streams And Bytes
 
@@ -1113,8 +1242,17 @@ There are Vitest benchmarks in `src/*.bench.ts`, plus a memory benchmark script.
 
 ```sh
 bun run bench
+bun run bench --target node
+bun run bench --target bun
 bun run bench:quick
+bun run bench:quick:node
+bun run bench:quick:bun
 bun run bench:memory
+```
+
+```sh
+bun run bench --target node src/overhead.bench.ts
+bun run bench --target bun --quick src/stream.bench.ts
 ```
 
 These benchmarks are intentionally tiny and can be sensitive to runtime noise,

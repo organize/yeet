@@ -1,3 +1,5 @@
+import type { Aborted, Exit, ExitError, Rejected } from './async.ts'
+
 import { type Either, type SerializedEither, fromJSON } from './either.ts'
 
 const VENDOR = 'yeet'
@@ -73,6 +75,47 @@ export type SerializedEitherSchema<E, A> = StandardSchemaV1<
 /** A Standard Schema that validates serialized JSON and rehydrates an `Either`. */
 export type EitherSchema<E, A> = StandardSchemaV1<unknown, Either<E, A>>
 
+/** Options for {@link exitErrorSchema}. */
+export type ExitErrorSchemaOptions<E, Reason = unknown, Cause = unknown> = {
+  readonly error?: StandardSchemaWithOptionalJSONSchemaV1<unknown, E>
+  readonly reason?: StandardSchemaWithOptionalJSONSchemaV1<unknown, Reason>
+  readonly cause?: StandardSchemaWithOptionalJSONSchemaV1<unknown, Cause>
+}
+
+/** Options for {@link serializedExitSchema} and {@link exitSchema}. */
+export type ExitSchemaOptions<
+  E,
+  A,
+  Reason = unknown,
+  Cause = unknown,
+> = ExitErrorSchemaOptions<E, Reason, Cause> & {
+  readonly value?: StandardSchemaWithOptionalJSONSchemaV1<unknown, A>
+}
+
+/** A Standard Schema for yeet's typed scoped error surface. */
+export type ExitErrorSchema<
+  E = never,
+  Reason = unknown,
+  Cause = unknown,
+> = StandardSchemaV1<unknown, ExitError<E, Reason, Cause>> &
+  StandardJSONSchemaV1<unknown, ExitError<E, Reason, Cause>>
+
+/** A Standard Schema for serialized `Exit` JSON. */
+export type SerializedExitSchema<
+  E,
+  A,
+  Reason = unknown,
+  Cause = unknown,
+> = SerializedEitherSchema<ExitError<E, Reason, Cause>, A>
+
+/** A Standard Schema that validates serialized JSON and rehydrates an `Exit`. */
+export type ExitSchema<
+  E,
+  A,
+  Reason = unknown,
+  Cause = unknown,
+> = StandardSchemaV1<unknown, Exit<E, A, Reason, Cause>>
+
 type InnerResult<T> =
   | { readonly value: T; readonly issues?: undefined }
   | { readonly issues: ReadonlyArray<StandardSchemaIssue> }
@@ -130,6 +173,69 @@ export function eitherSchema<E = unknown, A = unknown>(
       },
     },
   }
+}
+
+/**
+ * Creates a Standard Schema for yeet's scoped error surface:
+ * domain errors, `Aborted`, and `Rejected`.
+ */
+export function exitErrorSchema<E = never, Reason = unknown, Cause = unknown>(
+  options: ExitErrorSchemaOptions<E, Reason, Cause> = {},
+): ExitErrorSchema<E, Reason, Cause> {
+  return {
+    '~standard': {
+      version: 1,
+      vendor: VENDOR,
+      validate(
+        value,
+      ):
+        | StandardSchemaResult<ExitError<E, Reason, Cause>>
+        | Promise<StandardSchemaResult<ExitError<E, Reason, Cause>>> {
+        return validateExitError(value, options)
+      },
+      jsonSchema: {
+        input: (jsonSchemaOptions) =>
+          exitErrorJsonSchema(options, 'input', jsonSchemaOptions),
+        output: (jsonSchemaOptions) =>
+          exitErrorJsonSchema(options, 'output', jsonSchemaOptions),
+      },
+    },
+  }
+}
+
+/**
+ * Creates a Standard Schema for serialized `Exit` JSON.
+ */
+export function serializedExitSchema<
+  E = never,
+  A = unknown,
+  Reason = unknown,
+  Cause = unknown,
+>(
+  options: ExitSchemaOptions<E, A, Reason, Cause> = {},
+): SerializedExitSchema<E, A, Reason, Cause> {
+  const error = exitErrorSchema(options)
+  return serializedEitherSchema(
+    options.value === undefined ? { error } : { error, value: options.value },
+  )
+}
+
+/**
+ * Creates a Standard Schema that validates serialized `Exit` JSON and
+ * rehydrates it into a {@link Left} or {@link Right} instance.
+ */
+export function exitSchema<
+  E = never,
+  A = unknown,
+  Reason = unknown,
+  Cause = unknown,
+>(
+  options: ExitSchemaOptions<E, A, Reason, Cause> = {},
+): ExitSchema<E, A, Reason, Cause> {
+  const error = exitErrorSchema(options)
+  return eitherSchema(
+    options.value === undefined ? { error } : { error, value: options.value },
+  ) as ExitSchema<E, A, Reason, Cause>
 }
 
 function validateSerialized<E, A>(
@@ -200,6 +306,47 @@ function validateSerialized<E, A>(
   return failure('Expected _tag to be "Left" or "Right"', ['_tag'])
 }
 
+function validateExitError<E, Reason, Cause>(
+  value: unknown,
+  options: ExitErrorSchemaOptions<E, Reason, Cause>,
+):
+  | StandardSchemaResult<ExitError<E, Reason, Cause>>
+  | Promise<StandardSchemaResult<ExitError<E, Reason, Cause>>> {
+  if (isRecord(value) && value['_tag'] === 'Aborted') {
+    if (!('reason' in value))
+      return failure('Expected Aborted.reason', ['reason'])
+
+    const unexpected = unexpectedExitErrorProperty(value, 'reason')
+    if (unexpected !== undefined) {
+      return failure('Unexpected Exit error property', [unexpected])
+    }
+
+    const result = validateInner(options.reason, value['reason'], 'reason')
+    if (isPromiseLike(result)) return result.then(finishAborted<Reason>)
+    return finishAborted(result)
+  }
+
+  if (isRecord(value) && value['_tag'] === 'Rejected') {
+    if (!('cause' in value))
+      return failure('Expected Rejected.cause', ['cause'])
+
+    const unexpected = unexpectedExitErrorProperty(value, 'cause')
+    if (unexpected !== undefined) {
+      return failure('Unexpected Exit error property', [unexpected])
+    }
+
+    const result = validateInner(options.cause, value['cause'], 'cause')
+    if (isPromiseLike(result)) return result.then(finishRejected<Cause>)
+    return finishRejected(result)
+  }
+
+  if (options.error === undefined) return failure('Expected Exit error')
+
+  return options.error['~standard'].validate(value) as
+    | StandardSchemaResult<ExitError<E, Reason, Cause>>
+    | Promise<StandardSchemaResult<ExitError<E, Reason, Cause>>>
+}
+
 function validateInner<T>(
   schema: StandardSchemaWithOptionalJSONSchemaV1<unknown, T> | undefined,
   value: unknown,
@@ -227,6 +374,22 @@ function prefixIssues<T>(
     }
   }
   return result
+}
+
+function finishAborted<Reason>(
+  result: InnerResult<Reason>,
+): StandardSchemaResult<Aborted<Reason>> {
+  if (result.issues !== undefined) return result
+
+  return { value: { _tag: 'Aborted', reason: result.value } }
+}
+
+function finishRejected<Cause>(
+  result: InnerResult<Cause>,
+): StandardSchemaResult<Rejected<Cause>> {
+  if (result.issues !== undefined) return result
+
+  return { value: { _tag: 'Rejected', cause: result.value } }
 }
 
 function finishLeftSerialized<E, A>(
@@ -282,6 +445,16 @@ function unexpectedSerializedProperty(
   return undefined
 }
 
+function unexpectedExitErrorProperty(
+  value: Record<PropertyKey, unknown>,
+  payloadKey: 'reason' | 'cause',
+): string | undefined {
+  for (const key of Object.keys(value)) {
+    if (key !== '_tag' && key !== payloadKey) return key
+  }
+  return undefined
+}
+
 function eitherJsonSchema<E, A>(
   options: EitherSchemaOptions<E, A>,
   direction: 'input' | 'output',
@@ -309,6 +482,39 @@ function eitherJsonSchema<E, A>(
       },
     ],
   }
+}
+
+function exitErrorJsonSchema<E, Reason, Cause>(
+  options: ExitErrorSchemaOptions<E, Reason, Cause>,
+  direction: 'input' | 'output',
+  jsonSchemaOptions: StandardJSONSchemaOptions,
+): JsonSchema {
+  const variants: JsonSchema[] = [
+    {
+      type: 'object',
+      properties: {
+        _tag: { enum: ['Aborted'] },
+        reason: jsonSchemaFor(options.reason, direction, jsonSchemaOptions),
+      },
+      required: ['_tag', 'reason'],
+      additionalProperties: false,
+    },
+    {
+      type: 'object',
+      properties: {
+        _tag: { enum: ['Rejected'] },
+        cause: jsonSchemaFor(options.cause, direction, jsonSchemaOptions),
+      },
+      required: ['_tag', 'cause'],
+      additionalProperties: false,
+    },
+  ]
+
+  if (options.error !== undefined) {
+    variants.push(jsonSchemaFor(options.error, direction, jsonSchemaOptions))
+  }
+
+  return { anyOf: variants }
 }
 
 function jsonSchemaFor(
