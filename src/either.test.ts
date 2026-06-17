@@ -13,7 +13,10 @@ import {
   type StandardJSONSchemaV1,
   type StandardSchemaV1,
   eitherSchema,
+  exitErrorSchema,
+  exitSchema,
   serializedEitherSchema,
+  serializedExitSchema,
 } from './schema.js'
 
 const stringSchema = {
@@ -356,6 +359,133 @@ describe('serialization schemas', () => {
           properties: {
             _tag: { enum: ['Right'] },
             value: { type: 'number', title: 'draft-07' },
+          },
+          required: ['_tag', 'value'],
+          additionalProperties: false,
+        },
+      ],
+    })
+  })
+
+  it('validates built-in Exit errors with Standard Schema', async () => {
+    const schema = serializedExitSchema({
+      value: numberSchema,
+    })
+
+    const aborted = await schema['~standard'].validate({
+      _tag: 'Left',
+      error: { _tag: 'Aborted', reason: 'Stop' },
+    })
+    const rejected = await schema['~standard'].validate({
+      _tag: 'Left',
+      error: { _tag: 'Rejected', cause: 'Boom' },
+    })
+
+    expect(aborted).toEqual({
+      value: { _tag: 'Left', error: { _tag: 'Aborted', reason: 'Stop' } },
+    })
+    expect(rejected).toEqual({
+      value: { _tag: 'Left', error: { _tag: 'Rejected', cause: 'Boom' } },
+    })
+  })
+
+  it('rejects domain Exit errors without a domain error schema', async () => {
+    const schema = serializedExitSchema()
+
+    const result = await schema['~standard'].validate({
+      _tag: 'Left',
+      error: 'DomainError',
+    })
+
+    expect(result).toEqual({
+      issues: [{ message: 'Expected Exit error', path: ['error'] }],
+    })
+  })
+
+  it('allows domain Exit errors with an error schema and hydrates the result', async () => {
+    const schema = exitSchema({
+      error: stringSchema,
+      value: numberSchema,
+    })
+
+    const result = await schema['~standard'].validate({
+      _tag: 'Left',
+      error: 'DomainError',
+    })
+
+    expect(result.issues).toBeUndefined()
+    if (result.issues !== undefined) return
+    expect(result.value._tag).toBe('Left')
+    if (result.value._tag === 'Left')
+      expect(result.value.error).toBe('DomainError')
+  })
+
+  it('validates nested Exit reason and cause schemas', async () => {
+    const schema = exitErrorSchema({
+      reason: stringSchema,
+      cause: stringSchema,
+    })
+
+    const result = await schema['~standard'].validate({
+      _tag: 'Aborted',
+      reason: 42,
+    })
+
+    expect(result).toEqual({
+      issues: [{ message: 'Expected string', path: ['reason'] }],
+    })
+  })
+
+  it('ships a Standard JSON Schema for Exit errors', () => {
+    const schema = serializedExitSchema({
+      error: stringSchema,
+      value: numberSchema,
+      reason: stringSchema,
+      cause: stringSchema,
+    })
+
+    const jsonSchema = schema['~standard'].jsonSchema.output({
+      target: 'draft-2020-12',
+    })
+
+    expect(jsonSchema).toEqual({
+      oneOf: [
+        {
+          type: 'object',
+          properties: {
+            _tag: { enum: ['Left'] },
+            error: {
+              anyOf: [
+                {
+                  type: 'object',
+                  properties: {
+                    _tag: { enum: ['Aborted'] },
+                    reason: { type: 'string' },
+                  },
+                  required: ['_tag', 'reason'],
+                  additionalProperties: false,
+                },
+                {
+                  type: 'object',
+                  properties: {
+                    _tag: { enum: ['Rejected'] },
+                    cause: { type: 'string' },
+                  },
+                  required: ['_tag', 'cause'],
+                  additionalProperties: false,
+                },
+                { type: 'string' },
+              ],
+            },
+          },
+          required: ['_tag', 'error'],
+          additionalProperties: false,
+        },
+        {
+          type: 'object',
+          properties: {
+            _tag: { enum: ['Right'] },
+            value: { type: 'number' },
           },
           required: ['_tag', 'value'],
           additionalProperties: false,

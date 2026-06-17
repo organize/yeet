@@ -597,18 +597,24 @@ describe('yeet-style stream flows', () => {
 
   it('passes the abort signal into abortable either generators', async () => {
     const controller = new AbortController()
-    let injected = false
+    let injected: AbortSignal | undefined
+    let secondArg: AbortSignal | undefined
 
     const result = await either(
       controller.signal,
-      // eslint-disable-next-line require-yield
-      async function* ({ signal }) {
-        injected = signal === controller.signal
+      // oxlint-disable-next-line require-yield
+      async function* ({ signal }, second) {
+        injected = signal
+        secondArg = second
         return 'ok' as const
       },
     )
 
     expectRight(result, 'ok')
-    expect(injected).toBe(true)
+    expect(injected).toBe(secondArg)
+    expect(injected).not.toBe(controller.signal)
+    expect(typeof (injected as { fork?: unknown } | undefined)?.fork).toBe(
+      'function',
+    )
   })
 })

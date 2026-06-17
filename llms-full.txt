@@ -64,9 +64,9 @@ type Either<E, A> = Left<E> | Right<A>
 ## either — run a generator, short-circuit on the first Left
 
 ```ts
-either(fn: (raise: Raise) => Generator<Either<any, any>, Ret>): Either<E, A>
-either(fn: (raise: Raise) => AsyncGenerator<...>): Promise<Either<E, A>>
-either(signal: AbortSignal, fn: (raise: AbortRaise, signal: AbortSignal) => AsyncGenerator<...>): Promise<Either<Aborted | E, A>>
+either(fn: (raise: RaiseContext) => Generator<Either<any, any>, Ret>): Either<E, A>
+either(fn: (raise: RaiseContext) => AsyncGenerator<...>): Promise<Either<E, A>>
+either(signal: AbortSignal, fn: (raise: AbortRaise, signal: ScopeSignal) => AsyncGenerator<...>): Promise<Either<Aborted | E, A>>
 ```
 
 Sync:
@@ -107,10 +107,10 @@ const config = yield* (await raise(() => JSON.parse(readConfigFile())))
 ```
 
 Cancellation: pass an `AbortSignal` first. If it aborts mid-run, the result is `Left<Aborted>`.
-The injected `raise` is an `AbortRaise`, so use `raise.signal` when you also
-need `raise`, or destructure `async function* ({ signal })` when you only need
-the signal. The same signal is also passed as the callback's second argument for
-compatibility; prefer `raise.signal` / `({ signal })` in new examples.
+The injected callback parameter is a callable `RaiseContext`. Prefer
+`async function* ({ raise, signal })` when you need both, or
+`async function* ({ signal })` when you only need cancellation. The same enriched
+child signal is also passed as the callback's second argument for compatibility.
 
 ```ts
 const result = await either(signal, async function* ({ signal }) {
@@ -119,6 +119,52 @@ const result = await either(signal, async function* ({ signal }) {
   return b
 })
 ```
+
+`ScopeSignal` is a real `AbortSignal` plus scoped child work:
+
+```ts
+type ScopeSignal = AbortSignal & {
+  fork<E, A>(
+    task: (signal: ScopeSignal) => Either<E, A> | PromiseLike<Either<E, A>>,
+  ): Promise<Exit<E, A>>
+  all<const T extends readonly ScopeTask<any, any>[]>(
+    tasks: T,
+  ): Promise<Exit<ScopeTaskError<T[number]>, ScopeTaskValues<T>>>
+  race<const T extends readonly ScopeTask<any, any>[]>(
+    tasks: T,
+  ): Promise<Exit<ScopeTaskError<T[number]>, ScopeTaskValue<T[number]>>>
+}
+
+type Exit<E, A> = Either<E | Rejected | Aborted, A>
+```
+
+Use `signal.fork(task)`, `signal.all(tasks)`, and `signal.race(tasks)` inside
+async `either` for small structured-concurrency steps. Each task gets a child
+signal. A child `Left`, a scoped `all`/`race` failure, a rejection, a parent
+abort, or closing the outer generator aborts sibling work and waits for it to
+settle.
+
+```ts
+const result = await either(async function* ({ signal }) {
+  const user = signal.fork((signal) => fetchUser(id, signal))
+  const settings = signal.fork((signal) => fetchSettings(id, signal))
+  return {
+    user: yield* await user,
+    settings: yield* await settings,
+  }
+})
+// Promise<Either<Aborted | Rejected | FetchUserError | FetchSettingsError, { user: User; settings: Settings }>>
+```
+
+For clean inferred error unions, `yield* await` the fork promises you care
+about. Runtime failures from detached forks still cancel the scope, but
+TypeScript cannot infer an error type from a promise that is started and never
+referenced.
+
+Prefer `yield* await signal.all([...])` for batches: it starts all child tasks,
+preserves tuple order, and cancels siblings on first failure. Prefer
+`yield* await signal.race([...])` when the first child outcome wins; a winning
+`Right` aborts losers without poisoning the enclosing `either`.
 
 ## streams and bytes
 
@@ -178,10 +224,10 @@ Use `chunks` / `lines` / `ndjson` / `sse` when each streamed item should compose
 inside `either`:
 
 ```ts
-const result = await either(signal, async function* (raise) {
-  const res = yield* await raise(fetch(url, { signal: raise.signal }))
+const result = await either(signal, async function* ({ raise, signal }) {
+  const res = yield* await raise(fetch(url, { signal }))
 
-  for await (const next of sse(res.body, { signal: raise.signal })) {
+  for await (const next of sse(res.body, { signal })) {
     const event = yield* next
     if (event.event === 'error') return raise({ _tag: 'ProviderError', data: event.data })
     yield* await handleProviderEvent(event)
@@ -319,13 +365,17 @@ isSerializedEither(value)  // detect the outer envelope only (does not validate 
 For untrusted JSON, pass Standard Schema-compatible validators (Zod, Valibot, ArkType, TypeBox, …). `yeet` imports none of them; it only looks for `~standard`.
 
 ```ts
-import { eitherSchema, serializedEitherSchema } from '@big-time/yeet'
+import { eitherSchema, serializedEitherSchema, exitSchema, serializedExitSchema } from '@big-time/yeet'
 
 const Serialized = serializedEitherSchema({ error: ApiError, value: User }) // -> transport shape
 const Hydrated   = eitherSchema({ error: ApiError, value: User })           // -> real Left | Right
+const ExitJson   = serializedExitSchema({ error: ApiError, value: User })   // -> Left<ApiError | Aborted | Rejected> | Right<User>
+const ExitValue  = exitSchema({ error: ApiError, value: User })             // -> hydrated Exit
 ```
 
 Nested schemas are optional; without them the outer `{ _tag, error | value }` envelope is validated and the payload stays `unknown`.
+For `Exit`, omitting the domain `error` schema accepts only yeet's built-in
+`Aborted` and `Rejected` error payloads.
 
 ## Lower-level: fold / foldAsync
 
@@ -363,6 +413,7 @@ A call is lowered only when it is a direct `either(function* () { ... })` litera
 - Use `return raise(error)` for typed early exit. `raise` is the generator's first parameter. `raise('X')` alone (without `return`) just builds a `Left`; you usually `return` it.
 - Don't annotate the error type — it is inferred. Use `as const` on string-literal errors when you want a narrow literal type: `return raise('Inactive' as const)`.
 - Async: `const x = yield* await fetchThing()` where `fetchThing` returns `Promise<Either>`. Wrap raw promises and throwing starts with `raise(...)` so rejections/throws become `Left<Rejected>`.
+- Scoped child work: inside async `either`, destructure `{ signal }` and use `signal.fork((signal) => task(signal))`, `yield* await signal.all([...])`, or `yield* await signal.race([...])`; these keep child work under the current generator and cancel siblings on failures.
 - Streams: import helpers from `@big-time/yeet/stream`, not the root. Use `collectText` / `consume` for hot text-delta drains, and `for await (const next of ndjson(...) | sse(...)) { const item = yield* next }` for structured streams.
 - Optimizer: stream helpers in non-abortable `either(async function* ...)` compose with the transform (`yield* await json(...)`, `yield* await collectText(...)`, and `yield* next` where `next` is a `const` item from yeet `ndjson` / `sse` / `lines` / `chunks`). Abortable `either(signal, ...)` stays on the runtime driver.
 - Check results with `isLeft` / `isRight` or `result._tag === 'Left'`.
@@ -377,11 +428,14 @@ left right isLeft isRight
 either capture validate firstOf collect all collectAll
 ensure ensureNotNull raise
 fromJSON isSerializedEither serializedEitherSchema eitherSchema
+exitErrorSchema serializedExitSchema exitSchema
 fold foldAsync
 stream subpath: bytes text json chunks consume collectText lines ndjson sse
 types: Either, Left, Right, Rejected, Aborted, Check, Raise, Strategy, Step,
        SerializedEither, SerializedLeft, SerializedRight, Collected, InferE, InferA,
        StreamError, StreamReadError, StreamExternalError, StreamConsumerError,
        StreamTooLarge, TextTooLarge, LineTooLarge, InvalidChunk, DecodeError,
-       ParseError, ByteSource, StreamSource, SseEvent, AbortRaise
+       ParseError, ByteSource, StreamSource, SseEvent, RaiseContext, ScopeSignal,
+       ScopeTask, ScopeTaskError, ScopeTaskValue, ScopeTaskValues, AbortRaise,
+       Exit, ExitError, ExitErrorSchema, SerializedExitSchema, ExitSchema
 ```
