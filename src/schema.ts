@@ -1,4 +1,4 @@
-import type { Aborted, Exit, ExitError, Rejected } from './async.ts'
+import type { Aborted, Exit, ExitError, Rejected, Suppressed } from './async.ts'
 
 import { type Either, type SerializedEither, fromJSON } from './either.ts'
 
@@ -119,6 +119,20 @@ export type ExitSchema<
 type InnerResult<T> =
   | { readonly value: T; readonly issues?: undefined }
   | { readonly issues: ReadonlyArray<StandardSchemaIssue> }
+
+type SerializedEitherCandidate = {
+  readonly _tag?: unknown
+  readonly error?: unknown
+  readonly value?: unknown
+}
+
+type ExitErrorCandidate = {
+  readonly _tag?: unknown
+  readonly reason?: unknown
+  readonly cause?: unknown
+  readonly error?: unknown
+  readonly suppressed?: unknown
+}
 
 /**
  * Creates a Standard Schema for the serialized JSON representation of
@@ -263,11 +277,11 @@ function validateSerialized<E, A>(
   | StandardSchemaResult<SerializedEither<E, A>>
   | Promise<StandardSchemaResult<Either<E, A>>>
   | Promise<StandardSchemaResult<SerializedEither<E, A>>> {
-  if (!isRecord(value)) {
+  if (!isSerializedEitherCandidate(value)) {
     return failure('Expected serialized Either object')
   }
 
-  if (value['_tag'] === 'Left') {
+  if (value._tag === 'Left') {
     if (!('error' in value)) return failure('Expected Left.error', ['error'])
 
     const unexpected = unexpectedSerializedProperty(value, 'error')
@@ -275,7 +289,7 @@ function validateSerialized<E, A>(
       return failure('Unexpected serialized Either property', [unexpected])
     }
 
-    const result = validateInner(options.error, value['error'], 'error')
+    const result = validateInner(options.error, value.error, 'error')
     if (hydrate) {
       if (isPromiseLike(result)) return result.then(finishLeftHydrated<E, A>)
       return finishLeftHydrated<E, A>(result)
@@ -285,7 +299,7 @@ function validateSerialized<E, A>(
     return finishLeftSerialized<E, A>(result)
   }
 
-  if (value['_tag'] === 'Right') {
+  if (value._tag === 'Right') {
     if (!('value' in value)) return failure('Expected Right.value', ['value'])
 
     const unexpected = unexpectedSerializedProperty(value, 'value')
@@ -293,7 +307,7 @@ function validateSerialized<E, A>(
       return failure('Unexpected serialized Either property', [unexpected])
     }
 
-    const result = validateInner(options.value, value['value'], 'value')
+    const result = validateInner(options.value, value.value, 'value')
     if (hydrate) {
       if (isPromiseLike(result)) return result.then(finishRightHydrated<E, A>)
       return finishRightHydrated<E, A>(result)
@@ -312,32 +326,52 @@ function validateExitError<E, Reason, Cause>(
 ):
   | StandardSchemaResult<ExitError<E, Reason, Cause>>
   | Promise<StandardSchemaResult<ExitError<E, Reason, Cause>>> {
-  if (isRecord(value) && value['_tag'] === 'Aborted') {
+  if (isExitErrorCandidate(value) && value._tag === 'Aborted') {
     if (!('reason' in value))
       return failure('Expected Aborted.reason', ['reason'])
 
-    const unexpected = unexpectedExitErrorProperty(value, 'reason')
+    const unexpected = unexpectedExitErrorProperty(value, ['reason'])
     if (unexpected !== undefined) {
       return failure('Unexpected Exit error property', [unexpected])
     }
 
-    const result = validateInner(options.reason, value['reason'], 'reason')
+    const result = validateInner(options.reason, value.reason, 'reason')
     if (isPromiseLike(result)) return result.then(finishAborted<Reason>)
     return finishAborted(result)
   }
 
-  if (isRecord(value) && value['_tag'] === 'Rejected') {
-    if (!('cause' in value))
-      return failure('Expected Rejected.cause', ['cause'])
+  if (isExitErrorCandidate(value) && value._tag === 'Rejected') {
+    return validateRejected(value, options)
+  }
 
-    const unexpected = unexpectedExitErrorProperty(value, 'cause')
+  if (isExitErrorCandidate(value) && value._tag === 'Suppressed') {
+    if (!('error' in value))
+      return failure('Expected Suppressed.error', ['error'])
+    if (!('suppressed' in value)) {
+      return failure('Expected Suppressed.suppressed', ['suppressed'])
+    }
+
+    const unexpected = unexpectedExitErrorProperty(value, [
+      'error',
+      'suppressed',
+    ])
     if (unexpected !== undefined) {
       return failure('Unexpected Exit error property', [unexpected])
     }
 
-    const result = validateInner(options.cause, value['cause'], 'cause')
-    if (isPromiseLike(result)) return result.then(finishRejected<Cause>)
-    return finishRejected(result)
+    if (!Array.isArray(value.suppressed)) {
+      return failure('Expected Suppressed.suppressed array', ['suppressed'])
+    }
+
+    const primary = validateExitError(value.error, options)
+    const suppressed = validateRejectedList(value.suppressed, options)
+    if (isPromiseLike(primary) || isPromiseLike(suppressed)) {
+      return Promise.all([primary, suppressed]).then(([error, suppressed]) =>
+        finishSuppressed(error, suppressed),
+      )
+    }
+
+    return finishSuppressed(primary, suppressed)
   }
 
   if (options.error === undefined) return failure('Expected Exit error')
@@ -345,6 +379,58 @@ function validateExitError<E, Reason, Cause>(
   return options.error['~standard'].validate(value) as
     | StandardSchemaResult<ExitError<E, Reason, Cause>>
     | Promise<StandardSchemaResult<ExitError<E, Reason, Cause>>>
+}
+
+function validateRejected<Cause>(
+  value: ExitErrorCandidate,
+  options: ExitErrorSchemaOptions<unknown, unknown, Cause>,
+):
+  | StandardSchemaResult<Rejected<Cause>>
+  | Promise<StandardSchemaResult<Rejected<Cause>>> {
+  if (!('cause' in value)) return failure('Expected Rejected.cause', ['cause'])
+
+  const unexpected = unexpectedExitErrorProperty(value, ['cause'])
+  if (unexpected !== undefined) {
+    return failure('Unexpected Exit error property', [unexpected])
+  }
+
+  const result = validateInner(options.cause, value.cause, 'cause')
+  if (isPromiseLike(result)) return result.then(finishRejected<Cause>)
+  return finishRejected(result)
+}
+
+// oxlint-disable-next-line typescript/promise-function-async
+function validateRejectedList<Cause>(
+  values: readonly unknown[],
+  options: ExitErrorSchemaOptions<unknown, unknown, Cause>,
+):
+  | InnerResult<readonly Rejected<Cause>[]>
+  | Promise<InnerResult<readonly Rejected<Cause>[]>> {
+  const results = values.map(
+    // oxlint-disable-next-line typescript/promise-function-async
+    (value, index) => {
+      if (!isExitErrorCandidate(value) || value._tag !== 'Rejected') {
+        return failure('Expected Rejected', ['suppressed', index])
+      }
+
+      const result = validateRejected(value, options)
+      if (isPromiseLike(result)) {
+        return result.then((inner) => prefixIssues(inner, index))
+      }
+      return prefixIssues(result, index)
+    },
+  )
+
+  if (results.some(isPromiseLike)) {
+    return Promise.all(
+      results.map(
+        // oxlint-disable-next-line typescript/promise-function-async
+        (result) => Promise.resolve(result),
+      ),
+    ).then(finishRejectedList)
+  }
+
+  return finishRejectedList(results as readonly InnerResult<Rejected<Cause>>[])
 }
 
 function validateInner<T>(
@@ -392,6 +478,46 @@ function finishRejected<Cause>(
   return { value: { _tag: 'Rejected', cause: result.value } }
 }
 
+function finishRejectedList<Cause>(
+  results: readonly InnerResult<Rejected<Cause>>[],
+): InnerResult<readonly Rejected<Cause>[]> {
+  const issues = results.flatMap((result) => result.issues ?? [])
+  if (issues.length > 0) return { issues }
+
+  return {
+    value: results.map(
+      (result) => (result as { readonly value: Rejected<Cause> }).value,
+    ),
+  }
+}
+
+function finishSuppressed<E, Reason, Cause>(
+  error: StandardSchemaResult<ExitError<E, Reason, Cause>>,
+  suppressed: InnerResult<readonly Rejected<Cause>[]>,
+): StandardSchemaResult<
+  Suppressed<ExitError<E, Reason, Cause>, Rejected<Cause>>
+> {
+  if (error.issues !== undefined || suppressed.issues !== undefined) {
+    return {
+      issues: [
+        ...(error.issues?.map((issue) => ({
+          ...issue,
+          path: ['error', ...(issue.path ?? [])],
+        })) ?? []),
+        ...(suppressed.issues ?? []),
+      ],
+    }
+  }
+
+  return {
+    value: {
+      _tag: 'Suppressed',
+      error: error.value,
+      suppressed: suppressed.value,
+    },
+  }
+}
+
 function finishLeftSerialized<E, A>(
   result: InnerResult<E>,
 ): StandardSchemaResult<SerializedEither<E, A>> {
@@ -436,7 +562,7 @@ function failure(
 }
 
 function unexpectedSerializedProperty(
-  value: Record<PropertyKey, unknown>,
+  value: SerializedEitherCandidate,
   payloadKey: 'error' | 'value',
 ): string | undefined {
   for (const key of Object.keys(value)) {
@@ -446,11 +572,11 @@ function unexpectedSerializedProperty(
 }
 
 function unexpectedExitErrorProperty(
-  value: Record<PropertyKey, unknown>,
-  payloadKey: 'reason' | 'cause',
+  value: ExitErrorCandidate,
+  payloadKeys: readonly ('reason' | 'cause' | 'error' | 'suppressed')[],
 ): string | undefined {
   for (const key of Object.keys(value)) {
-    if (key !== '_tag' && key !== payloadKey) return key
+    if (key !== '_tag' && !payloadKeys.includes(key as never)) return key
   }
   return undefined
 }
@@ -508,6 +634,27 @@ function exitErrorJsonSchema<E, Reason, Cause>(
       required: ['_tag', 'cause'],
       additionalProperties: false,
     },
+    {
+      type: 'object',
+      properties: {
+        _tag: { enum: ['Suppressed'] },
+        error: {},
+        suppressed: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              _tag: { enum: ['Rejected'] },
+              cause: jsonSchemaFor(options.cause, direction, jsonSchemaOptions),
+            },
+            required: ['_tag', 'cause'],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ['_tag', 'error', 'suppressed'],
+      additionalProperties: false,
+    },
   ]
 
   if (options.error !== undefined) {
@@ -528,7 +675,13 @@ function jsonSchemaFor(
   return jsonSchema[direction](options)
 }
 
-function isRecord(value: unknown): value is Record<PropertyKey, unknown> {
+function isSerializedEitherCandidate(
+  value: unknown,
+): value is SerializedEitherCandidate {
+  return typeof value === 'object' && value !== null
+}
+
+function isExitErrorCandidate(value: unknown): value is ExitErrorCandidate {
   return typeof value === 'object' && value !== null
 }
 
