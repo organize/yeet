@@ -16,6 +16,12 @@ export type YeetTransformResult = {
 }
 
 type CombinatorName = 'either' | 'validate' | 'firstOf' | 'collect'
+type EitherIntrinsicName =
+  | 'capture'
+  | 'ensure'
+  | 'ensureNotNull'
+  | 'left'
+  | 'right'
 type HelperKey = 'raise' | 'left' | 'right'
 type StreamItemHelperName = 'chunks' | 'lines' | 'ndjson' | 'sse'
 
@@ -35,8 +41,19 @@ type TransformState = {
 type YieldRewrite = {
   readonly path: NodePath<t.YieldExpression>
   readonly statement: NodePath<t.Statement>
-  readonly temp: t.Identifier
+  readonly replacement: t.Expression
   readonly prelude: t.Statement[]
+  readonly removeStatement?: boolean
+}
+
+type EitherParameter = {
+  readonly raiseName?: string
+}
+
+type EitherIntrinsicCall = {
+  readonly name: EitherIntrinsicName
+  readonly call: NodePath<t.CallExpression>
+  readonly arguments: readonly t.Expression[]
 }
 
 const DEFAULT_MODULE_NAMES = ['@big-time/yeet', 'yeet']
@@ -46,6 +63,13 @@ const COMBINATOR_NAMES = new Set<CombinatorName>([
   'validate',
   'firstOf',
   'collect',
+])
+const EITHER_INTRINSIC_NAMES = new Set<EitherIntrinsicName>([
+  'capture',
+  'ensure',
+  'ensureNotNull',
+  'left',
+  'right',
 ])
 const STREAM_ITEM_HELPERS = new Set<StreamItemHelperName>([
   'chunks',
@@ -138,6 +162,60 @@ function isCombinatorName(name: string): name is CombinatorName {
   return COMBINATOR_NAMES.has(name as CombinatorName)
 }
 
+function getEitherIntrinsicCall(
+  path: NodePath<t.YieldExpression>,
+  source: string,
+): EitherIntrinsicCall | undefined {
+  if (!path.node.delegate) return undefined
+  const argument = path.get('argument')
+  if (!argument.isExpression()) return undefined
+
+  const expression = skipTransparentExpressionPath(argument)
+  if (!expression.isCallExpression()) return undefined
+  const callee = expression.get('callee')
+  if (!callee.isIdentifier()) return undefined
+
+  const name = getImportedName(callee, source)
+  if (
+    name === undefined ||
+    !EITHER_INTRINSIC_NAMES.has(name as EitherIntrinsicName)
+  ) {
+    return undefined
+  }
+
+  const intrinsic = name as EitherIntrinsicName
+  const expectedArguments =
+    intrinsic === 'ensure' || intrinsic === 'ensureNotNull' ? 2 : 1
+  if (expression.node.arguments.length !== expectedArguments) return undefined
+
+  const args: t.Expression[] = []
+  for (const input of expression.node.arguments) {
+    if (!t.isExpression(input)) return undefined
+    args.push(input)
+  }
+
+  return { name: intrinsic, call: expression, arguments: args }
+}
+
+function getImportedName(
+  path: NodePath<t.Identifier>,
+  source: string,
+): string | undefined {
+  const bindingPath = path.scope.getBinding(path.node.name)?.path
+  if (!bindingPath?.isImportSpecifier()) return undefined
+
+  const declaration = bindingPath.parentPath
+  if (
+    !declaration.isImportDeclaration() ||
+    declaration.node.source.value !== source
+  ) {
+    return undefined
+  }
+
+  const imported = bindingPath.node.imported
+  return t.isIdentifier(imported) ? imported.name : imported.value
+}
+
 function lowerCombinatorCall(
   callPath: NodePath<t.CallExpression>,
   target: { readonly name: CombinatorName; readonly source: string },
@@ -169,11 +247,9 @@ function lowerEitherCall(
   if (fnPath.node.id !== null) return false
   if (fnPath.node.params.length > 1) return false
 
-  const raiseParam = fnPath.get('params')[0]
-  if (raiseParam !== undefined && !raiseParam.isIdentifier()) return false
-  const raiseName = raiseParam?.isIdentifier()
-    ? raiseParam.node.name
-    : undefined
+  const parameter = parseEitherParameter(fnPath)
+  if (parameter === undefined) return false
+  const raiseName = parameter.raiseName
   if (!isSafeEitherGenerator(fnPath, raiseName, state.streamModuleNames)) {
     return false
   }
@@ -191,7 +267,10 @@ function lowerEitherCall(
   if (raiseHelper !== undefined) {
     rewriteRaiseReferences(fnPath, raiseName, raiseHelper)
   }
-  rewriteYieldExpressions(fnPath)
+  const leftHelper = usesEitherFailureIntrinsic(fnPath, source)
+    ? getHelper(ensureHelpers(programPath, source, state, ['left']), 'left')
+    : undefined
+  rewriteYieldExpressions(fnPath, source, leftHelper)
   rewriteEitherReturns(fnPath, rightHelper)
   appendFallthroughReturn(fnPath, rightHelper)
 
@@ -336,6 +415,50 @@ function lowerCollectCall(callPath: NodePath<t.CallExpression>): boolean {
   return true
 }
 
+function parseEitherParameter(
+  fnPath: NodePath<t.FunctionExpression>,
+): EitherParameter | undefined {
+  const parameter = fnPath.get('params')[0]
+  if (parameter === undefined) return {}
+  if (parameter.isIdentifier()) return { raiseName: parameter.node.name }
+  if (!parameter.isObjectPattern()) return undefined
+
+  const properties = parameter.get('properties')
+  if (properties.length !== 1) return undefined
+  const property = properties[0]
+  if (!property?.isObjectProperty() || property.node.computed) return undefined
+
+  const key = property.get('key')
+  const value = property.get('value')
+  if (!key.isIdentifier({ name: 'raise' }) || !value.isIdentifier()) {
+    return undefined
+  }
+
+  return { raiseName: value.node.name }
+}
+
+function usesEitherFailureIntrinsic(
+  fnPath: NodePath<t.FunctionExpression>,
+  source: string,
+): boolean {
+  let usesFailureIntrinsic = false
+
+  fnPath.traverse({
+    Function(path: NodePath<t.Function>) {
+      if (path !== fnPath) path.skip()
+    },
+    YieldExpression(path: NodePath<t.YieldExpression>) {
+      const intrinsic = getEitherIntrinsicCall(path, source)
+      if (intrinsic?.name === 'ensure' || intrinsic?.name === 'ensureNotNull') {
+        usesFailureIntrinsic = true
+        path.stop()
+      }
+    },
+  })
+
+  return usesFailureIntrinsic
+}
+
 function isSafeEitherGenerator(
   fnPath: NodePath<t.FunctionExpression>,
   raiseName: string | undefined,
@@ -376,6 +499,8 @@ function isSafeEitherGenerator(
       if (
         raiseBinding !== undefined &&
         path.node.name === raiseName &&
+        path !== raiseBinding.path &&
+        !raiseBinding.path.isAncestor(path) &&
         path.isReferenced() &&
         path.scope.getBinding(raiseName) === raiseBinding &&
         !isAllowedRaiseReference(path)
@@ -542,8 +667,10 @@ function isLowerableYield(
   if (!path.node.delegate || argument === null || argument === undefined) {
     return false
   }
+  const argumentPath = path.get('argument')
   if (
-    !isPlausibleEitherExpression(argument) &&
+    (!argumentPath.isExpression() ||
+      !isPlausibleEitherExpressionPath(argumentPath)) &&
     !isProvenStreamItemYield(path, argument, streamModuleNames)
   ) {
     return false
@@ -564,6 +691,68 @@ function isPlausibleEitherExpression(node: t.Expression): boolean {
     return true
   }
   return false
+}
+
+function isPlausibleEitherExpressionPath(
+  path: NodePath<t.Expression>,
+  seen: Set<t.Identifier> = new Set(),
+): boolean {
+  const expression = skipTransparentExpressionPath(path)
+  if (expression.isCallExpression()) return true
+
+  if (expression.isAwaitExpression()) {
+    const argument = expression.get('argument')
+    if (!argument.isExpression()) return false
+    const awaited = skipTransparentExpressionPath(argument)
+    return (
+      awaited.isCallExpression() ||
+      isPlausibleEitherExpressionPath(awaited, seen)
+    )
+  }
+
+  if (!expression.isIdentifier()) return false
+  const binding = expression.scope.getBinding(expression.node.name)
+  if (
+    binding === undefined ||
+    binding.kind !== 'const' ||
+    !binding.constant ||
+    seen.has(binding.identifier)
+  ) {
+    return false
+  }
+
+  const initializer = getConstBindingInitializer(binding.path)
+  if (initializer === undefined) return false
+
+  seen.add(binding.identifier)
+  return isPlausibleEitherExpressionPath(initializer, seen)
+}
+
+function getConstBindingInitializer(
+  bindingPath: NodePath<t.Node>,
+): NodePath<t.Expression> | undefined {
+  let declarator: NodePath<t.VariableDeclarator>
+  if (bindingPath.isVariableDeclarator()) {
+    declarator = bindingPath
+  } else {
+    if (!bindingPath.isIdentifier()) return undefined
+    const parent = bindingPath.parentPath
+    if (!parent.isVariableDeclarator() || parent.node.id !== bindingPath.node) {
+      return undefined
+    }
+    declarator = parent
+  }
+
+  const declaration = declarator.parentPath
+  if (
+    !declaration.isVariableDeclaration() ||
+    declaration.node.kind !== 'const'
+  ) {
+    return undefined
+  }
+
+  const initializer = declarator.get('init')
+  return initializer.isExpression() ? initializer : undefined
 }
 
 function isProvenStreamItemYield(
@@ -787,6 +976,9 @@ function rewriteRaiseReferences(
       if (path !== fnPath) path.skip()
     },
     Identifier(path: NodePath<t.Identifier>) {
+      if (path === raiseBinding.path || raiseBinding.path.isAncestor(path)) {
+        return
+      }
       if (
         path.isReferencedIdentifier({ name: raiseName }) &&
         path.scope.getBinding(raiseName) === raiseBinding
@@ -797,7 +989,11 @@ function rewriteRaiseReferences(
   })
 }
 
-function rewriteYieldExpressions(fnPath: NodePath<t.FunctionExpression>): void {
+function rewriteYieldExpressions(
+  fnPath: NodePath<t.FunctionExpression>,
+  source: string,
+  leftHelper: t.Identifier | undefined,
+): void {
   const rewrites: YieldRewrite[] = []
 
   fnPath.traverse({
@@ -808,24 +1004,17 @@ function rewriteYieldExpressions(fnPath: NodePath<t.FunctionExpression>): void {
       const statement = path.getStatementParent()
       const argument = path.node.argument
       if (statement === null || argument === null) return
-
-      const temp = path.scope.generateUidIdentifier('yeet')
-      const prelude = [
-        t.variableDeclaration('const', [
-          t.variableDeclarator(t.cloneNode(temp), argument),
-        ]),
-        generatedLeftReturn(t.cloneNode(temp)),
-      ]
-
-      rewrites.push({ path, statement, temp, prelude })
+      rewrites.push(
+        buildEitherYieldRewrite(path, statement, source, leftHelper),
+      )
     },
   })
 
   const byStatement = new Map<NodePath<t.Statement>, t.Statement[]>()
+  const removedStatements = new Set<NodePath<t.Statement>>()
   for (const rewrite of rewrites) {
-    rewrite.path.replaceWith(
-      t.memberExpression(t.cloneNode(rewrite.temp), t.identifier('value')),
-    )
+    if (rewrite.removeStatement) removedStatements.add(rewrite.statement)
+    else rewrite.path.replaceWith(rewrite.replacement)
 
     const statements = byStatement.get(rewrite.statement)
     if (statements === undefined) {
@@ -837,7 +1026,103 @@ function rewriteYieldExpressions(fnPath: NodePath<t.FunctionExpression>): void {
 
   for (const [statement, prelude] of byStatement) {
     statement.insertBefore(prelude)
+    if (removedStatements.has(statement)) statement.remove()
   }
+}
+
+function buildEitherYieldRewrite(
+  path: NodePath<t.YieldExpression>,
+  statement: NodePath<t.Statement>,
+  source: string,
+  leftHelper: t.Identifier | undefined,
+): YieldRewrite {
+  const intrinsic = getEitherIntrinsicCall(path, source)
+  if (intrinsic === undefined) {
+    const argument = path.node.argument
+    if (argument === null || argument === undefined) {
+      throw new Error('Missing lowerable yield argument')
+    }
+
+    const temp = path.scope.generateUidIdentifier('yeet')
+    return {
+      path,
+      statement,
+      replacement: member(temp, 'value'),
+      prelude: [
+        constDeclaration(temp, argument),
+        generatedLeftReturn(t.cloneNode(temp)),
+      ],
+    }
+  }
+
+  const first = intrinsic.arguments[0]
+  if (first === undefined) throw new Error('Missing yeet intrinsic argument')
+
+  if (intrinsic.name === 'left') {
+    const result = path.scope.generateUidIdentifier('yeetLeft')
+    return {
+      path,
+      statement,
+      replacement: t.identifier('undefined'),
+      removeStatement: isDirectYieldExpressionStatement(path),
+      prelude: [
+        constDeclaration(result, t.cloneNode(intrinsic.call.node, true)),
+        generatedReturn(t.cloneNode(result)),
+      ],
+    }
+  }
+
+  if (intrinsic.name === 'right' || intrinsic.name === 'capture') {
+    const value = path.scope.generateUidIdentifier('yeetValue')
+    return {
+      path,
+      statement,
+      replacement: t.cloneNode(value),
+      prelude: [constDeclaration(value, t.cloneNode(first, true))],
+    }
+  }
+
+  const second = intrinsic.arguments[1]
+  if (second === undefined || leftHelper === undefined) {
+    throw new Error('Missing yeet guard lowering helper')
+  }
+
+  const value = path.scope.generateUidIdentifier('yeetValue')
+  const onFail = path.scope.generateUidIdentifier('yeetOnFail')
+  const failure = t.callExpression(t.cloneNode(onFail), [])
+  const fail = t.ifStatement(
+    intrinsic.name === 'ensure'
+      ? t.unaryExpression('!', t.cloneNode(value))
+      : t.binaryExpression('==', t.cloneNode(value), t.nullLiteral()),
+    generatedReturn(t.callExpression(t.cloneNode(leftHelper), [failure])),
+  )
+
+  return {
+    path,
+    statement,
+    replacement:
+      intrinsic.name === 'ensure'
+        ? t.identifier('undefined')
+        : t.cloneNode(value),
+    removeStatement:
+      intrinsic.name === 'ensure' && isDirectYieldExpressionStatement(path),
+    prelude: [
+      t.variableDeclaration('const', [
+        t.variableDeclarator(t.cloneNode(value), t.cloneNode(first, true)),
+        t.variableDeclarator(t.cloneNode(onFail), t.cloneNode(second, true)),
+      ]),
+      fail,
+    ],
+  }
+}
+
+function constDeclaration(
+  id: t.Identifier,
+  value: t.Expression,
+): t.VariableDeclaration {
+  return t.variableDeclaration('const', [
+    t.variableDeclarator(t.cloneNode(id), value),
+  ])
 }
 
 function rewriteValidateYields(
@@ -865,12 +1150,17 @@ function rewriteValidateYields(
         generatedErrorPush(t.cloneNode(temp), errors),
       ]
 
-      rewrites.push({ path, statement, temp, prelude })
+      rewrites.push({
+        path,
+        statement,
+        replacement: rightValueOrUndefined(temp),
+        prelude,
+      })
     },
   })
 
   for (const rewrite of rewrites) {
-    rewrite.path.replaceWith(rightValueOrUndefined(rewrite.temp))
+    rewrite.path.replaceWith(rewrite.replacement)
     rewrite.statement.insertBefore(rewrite.prelude)
   }
 }
@@ -966,19 +1256,22 @@ function getValidateYieldInput(
 }
 
 function generatedLeftReturn(temp: t.Identifier): t.IfStatement {
-  const returnStatement = t.returnStatement(t.cloneNode(temp))
-  ;(
-    returnStatement as t.ReturnStatement & { __yeetGenerated?: boolean }
-  ).__yeetGenerated = true
-
   return t.ifStatement(
     t.binaryExpression(
       '===',
       t.memberExpression(t.cloneNode(temp), t.identifier('_tag')),
       t.stringLiteral('Left'),
     ),
-    returnStatement,
+    generatedReturn(t.cloneNode(temp)),
   )
+}
+
+function generatedReturn(argument: t.Expression): t.ReturnStatement {
+  const statement = t.returnStatement(argument)
+  ;(
+    statement as t.ReturnStatement & { __yeetGenerated?: boolean }
+  ).__yeetGenerated = true
+  return statement
 }
 
 function generatedRightReturn(
@@ -1080,6 +1373,13 @@ function rewriteEitherReturns(
         return
       }
 
+      if (isDefinitelyNotLeft(argument)) {
+        path.node.argument = t.callExpression(t.cloneNode(rightHelper), [
+          argument,
+        ])
+        return
+      }
+
       const ret = path.scope.generateUidIdentifier('yeetReturn')
       path.insertBefore(
         t.variableDeclaration('const', [
@@ -1089,6 +1389,40 @@ function rewriteEitherReturns(
       path.node.argument = finishEitherReturn(t.cloneNode(ret), rightHelper)
     },
   })
+}
+
+function isDefinitelyNotLeft(node: t.Expression): boolean {
+  const expression = skipTransparentExpressionNode(node)
+  if (
+    t.isNullLiteral(expression) ||
+    t.isStringLiteral(expression) ||
+    t.isNumericLiteral(expression) ||
+    t.isBooleanLiteral(expression) ||
+    t.isBigIntLiteral(expression) ||
+    t.isTemplateLiteral(expression) ||
+    t.isUnaryExpression(expression) ||
+    t.isBinaryExpression(expression) ||
+    t.isUpdateExpression(expression) ||
+    t.isFunctionExpression(expression) ||
+    t.isArrowFunctionExpression(expression) ||
+    t.isClassExpression(expression)
+  ) {
+    return true
+  }
+
+  if (t.isConditionalExpression(expression)) {
+    return (
+      isDefinitelyNotLeft(expression.consequent) &&
+      isDefinitelyNotLeft(expression.alternate)
+    )
+  }
+
+  if (t.isSequenceExpression(expression)) {
+    const last = expression.expressions.at(-1)
+    return last !== undefined && isDefinitelyNotLeft(last)
+  }
+
+  return false
 }
 
 function rewriteFinalizingReturns(
@@ -1162,6 +1496,9 @@ function appendFallthroughReturn(
   fnPath: NodePath<t.FunctionExpression>,
   rightHelper: t.Identifier,
 ): void {
+  const last = fnPath.node.body.body.at(-1)
+  if (t.isReturnStatement(last) || t.isThrowStatement(last)) return
+
   fnPath.node.body.body.push(
     t.returnStatement(
       t.callExpression(t.cloneNode(rightHelper), [t.identifier('undefined')]),

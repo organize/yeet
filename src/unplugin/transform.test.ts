@@ -122,12 +122,9 @@ describe('yeet unplugin transform', () => {
       "import { right as _yeetRight } from "<yeet>";
       import { either as e, right } from '<yeet>';
       export const result = (() => {
-        const _yeet = right(41);
-        if (_yeet._tag === "Left") return _yeet;
-        const value = _yeet.value;
-        const _yeetReturn = value + 1;
-        return _yeetReturn !== null && typeof _yeetReturn === "object" && _yeetReturn._tag === "Left" ? _yeetReturn : _yeetRight(_yeetReturn);
-        return _yeetRight(undefined);
+        const _yeetValue = 41;
+        const value = _yeetValue;
+        return _yeetRight(value + 1);
       })();"
     `)
   })
@@ -198,7 +195,7 @@ describe('yeet unplugin transform', () => {
       `,
       `
         import { either, right } from '@big-time/yeet'
-        const value = right(1)
+        let value = right(1)
         either(function* () {
           return yield* value
         })
@@ -225,6 +222,203 @@ describe('yeet unplugin transform', () => {
     for (const source of cases) {
       expect(transformYeet(source, 'fixture.ts')).toBeNull()
     }
+  })
+
+  it('fuses yeet primitives consumed directly by yield*', async () => {
+    const body = `
+      import { capture, ensure, ensureNotNull } from ${JSON.stringify(YEET_SOURCE)}
+
+      export function run(input) {
+        const events = []
+        const errors = {
+          missing() {
+            events.push(this === undefined ? 'missing:unbound' : 'missing:bound')
+            return 'Missing'
+          },
+        }
+
+        const result = either(function* () {
+          const raw = yield* right(input.value)
+          yield* ensure(
+            input.allowed,
+            (events.push('callback:evaluated'), errors.missing),
+          )
+          const value = yield* ensureNotNull(
+            raw,
+            (
+              events.push('null:callback:evaluated'),
+              () => {
+                events.push('null:invoked')
+                return 'Null'
+              }
+            ),
+          )
+          const captured = yield* capture(
+            input.cached ? right('cache') : left('CacheMiss'),
+          )
+          try {
+            if (input.stop) {
+              yield* left('Stopped')
+            }
+          } finally {
+            events.push('finally')
+          }
+          return { value, captured }
+        })
+
+        return { result, events }
+      }
+    `
+
+    for (const input of [
+      { value: 'ok', allowed: true, cached: true, stop: false },
+      { value: 'ok', allowed: false, cached: false, stop: false },
+      { value: null, allowed: true, cached: false, stop: false },
+      { value: 'ok', allowed: true, cached: false, stop: true },
+    ]) {
+      const { runtime, optimized, code } = await runBoth(body, [input])
+      expect(simplify(optimized)).toEqual(simplify(runtime))
+      expect(code).not.toContain('yield*')
+      expect(code).not.toMatch(/\b(?:capture|ensure|ensureNotNull)\(/)
+    }
+  })
+
+  it('does not fuse shadowed primitive names', () => {
+    const source = `
+      import { either, right as yeetRight } from '@big-time/yeet'
+
+      function right(value) {
+        return yeetRight(value + 1)
+      }
+
+      export const result = either(function* () {
+        return yield* right(1)
+      })
+    `
+
+    const transformed = transformYeet(source, 'fixture.ts')
+
+    expect(transformed?.optimized).toBe(1)
+    expect(transformed?.code).toContain('right(1)')
+    expect(transformed?.code).toContain('_tag === "Left"')
+  })
+
+  it('fuses aliased yeet primitive imports by binding', () => {
+    const source = `
+      import {
+        either,
+        right as succeed,
+        capture as hold,
+        ensure as guard,
+        ensureNotNull as present,
+      } from '@big-time/yeet'
+
+      export const result = either(function* () {
+        const initial = yield* succeed(41)
+        yield* guard(initial > 0, () => 'Invalid')
+        const value = yield* present(initial, () => 'Missing')
+        return yield* hold(succeed(value + 1))
+      })
+    `
+
+    const transformed = transformYeet(source, 'fixture.ts')
+
+    expect(transformed?.optimized).toBe(1)
+    expect(transformed?.code).not.toMatch(/\b(?:hold|guard|present)\(/)
+  })
+
+  it('lowers immutable Either aliases but not mutable bindings', async () => {
+    const body = `
+      function lookup(ok) {
+        return ok ? right(41) : left('Missing')
+      }
+
+      async function lookupAsync(ok) {
+        return lookup(ok)
+      }
+
+      export async function run(ok) {
+        const syncResult = lookup(ok)
+        const asyncResult = await lookupAsync(ok)
+        const pendingResult = lookupAsync(ok)
+
+        return either(async function* () {
+          const first = yield* syncResult
+          const second = yield* asyncResult
+          const third = yield* await pendingResult
+          return first + second + third
+        })
+      }
+    `
+
+    const success = await runBoth(body, [true])
+    const failure = await runBoth(body, [false])
+
+    expect(simplify(success.optimized)).toEqual(simplify(success.runtime))
+    expect(simplify(failure.optimized)).toEqual(simplify(failure.runtime))
+    expect(success.code).not.toContain('function*')
+  })
+
+  it('lowers destructured raise bindings without opening a scope', async () => {
+    const body = `
+      export function run(mode) {
+        const aliased = either(function* ({ raise: fail }) {
+          if (mode === 'fail') return fail('Failed')
+          const value = yield* right(41)
+          return value + 1
+        })
+
+        const shorthand = either(function* ({ raise }) {
+          if (mode === 'fail') return raise('Failed')
+          return 'ok'
+        })
+
+        return { aliased, shorthand }
+      }
+    `
+
+    const success = await runBoth(body, ['ok'])
+    const failure = await runBoth(body, ['fail'])
+
+    expect(simplify(success.optimized)).toEqual(simplify(success.runtime))
+    expect(simplify(failure.optimized)).toEqual(simplify(failure.runtime))
+    expect(success.code).not.toContain('function*')
+  })
+
+  it('keeps scoped context destructuring on the runtime path', () => {
+    for (const parameter of ['{ signal }', '{ raise, signal }']) {
+      const source = `
+        import { either, right } from '@big-time/yeet'
+        either(async function* (${parameter}) {
+          return yield* right(signal)
+        })
+      `
+
+      expect(transformYeet(source, 'fixture.ts')).toBeNull()
+    }
+  })
+
+  it('simplifies only statically primitive final returns', () => {
+    const source = `
+      import { either, right } from '@big-time/yeet'
+
+      export const primitive = either(function* () {
+        const value = yield* right(41)
+        return value + 1
+      })
+
+      export const structural = either(function* () {
+        return { value: 42 }
+      })
+    `
+
+    const transformed = transformYeet(source, 'fixture.ts')
+
+    expect(transformed?.optimized).toBe(2)
+    expect(transformed?.code).toContain('_yeetRight(value + 1)')
+    expect(transformed?.code).toMatch(
+      /typeof _yeetReturn\d* === "object" && _yeetReturn\d*\._tag === "Left"/,
+    )
   })
 
   it('matches runtime behavior for sync success, Left, and return raise()', async () => {
