@@ -1,6 +1,6 @@
 # yeet
 
-> A tiny (~4.1 kB gzipped core; stream helpers on a separate ~2.9 kB subpath), zero-dependency `Either` / `Result` library for TypeScript. It models success and failure as ordinary values (`Right<A>` and `Left<E>`) and uses generator-based do-notation instead of a method-chaining API. You write normal control flow — `if`, `for`, early `return` — and TypeScript infers the error union from what you yield and raise. An optional build-time transform lowers the generators to plain branches for zero runtime overhead.
+> A tiny (~5.0 kB gzipped core; stream helpers on a separate ~3.1 kB subpath), zero-dependency `Either` / `Result` library for TypeScript. It models success and failure as ordinary values (`Right<A>` and `Left<E>`) and uses generator-based do-notation instead of a method-chaining API. You write normal control flow — `if`, `for`, early `return` — and TypeScript infers the error union from what you yield and raise. An optional build-time transform lowers the generators to plain branches for zero runtime overhead.
 
 `yeet` deliberately has no `map` / `flatMap` / `andThen` / `pipe` surface. The happy path reads top-to-bottom; errors flow through the type system. Package name on npm is `@big-time/yeet`. It is ESM-only and ships TypeScript declarations.
 
@@ -136,13 +136,20 @@ type ScopeSignal = AbortSignal & {
   forkRace<const T extends readonly ScopeTask<any, any>[]>(
     tasks: T,
   ): Promise<Exit<ScopeTaskError<T[number]>, ScopeTaskValue<T[number]>>>
+  forkEach<Input, E, A>(
+    items: Iterable<Input> | AsyncIterable<Input>,
+    options: { readonly concurrency: number },
+    task: (item: Input, signal: ScopeSignal, index: number) =>
+      Either<E, A> | PromiseLike<Either<E, A>>,
+  ): ForkEachIterator<Input, E, A>
 }
 
 type Exit<E, A> = Either<E | Rejected | Aborted | Suppressed, A>
 ```
 
-Use `signal.fork(task)`, `signal.forkAll(tasks)`, `signal.forkFirst(tasks)`, and
-`signal.forkRace(tasks)` inside async `either` for small structured-concurrency
+Use `signal.fork(task)`, `signal.forkAll(tasks)`, `signal.forkFirst(tasks)`,
+`signal.forkRace(tasks)`, and `signal.forkEach(items, options, task)` inside
+async `either` for structured-concurrency
 steps. Each task gets a child signal. A child `Left`, a scoped `forkAll` /
 `forkRace` failure, a rejection, a parent abort, or closing the outer generator
 aborts sibling work and waits for it to settle. `forkFirst` records candidate
@@ -181,6 +188,34 @@ failures do not stop siblings, and all-failed errors retain input order. Prefer
 `yield* await signal.forkRace([...])` when the first child outcome wins; a
 winning `Right` aborts losers with `SiblingSettled` without poisoning the
 enclosing `either`.
+
+`signal.forkEach` is the bounded completion-stream form. It lazily pulls a sync
+or async source, runs at most `concurrency` child tasks, and yields
+`{ item, index, result: Exit<E, A> }` in settlement order. Individual task
+`Left` / `Rejected` outcomes are data and do not fail the scope by themselves.
+Use `yield* result` for fail-fast consumption, or inspect and continue.
+
+```ts
+const result = await either(async function* ({ signal }) {
+  for await (const { item, result } of signal.forkEach(
+    documents,
+    { concurrency: 8 },
+    (document, signal) => embed(document, signal),
+  )) {
+    const embedding = yield* result
+    yield* await saveEmbedding(item.id, embedding)
+  }
+  return 'indexed' as const
+})
+// Promise resolves to Either<Aborted | Rejected | EmbedError | SaveError, 'indexed'>
+```
+
+`forkEach` keeps `active tasks + queued completions <= concurrency` and permits
+only one outstanding source pull. Breaking, `.return()`, or
+`[Symbol.asyncDispose]()` closes the input, aborts active children with the
+singleton `forkEachStopped()` reason, and awaits teardown. A source pull/close
+failure is infrastructure failure and becomes `Left<Rejected>`. Cancellation is
+cooperative; an uncooperative mapper or source pull can delay close.
 
 ```ts
 const answer = yield* await signal.forkFirst([
@@ -288,20 +323,25 @@ Breaking a `chunks` / `lines` / `ndjson` / `sse` loop, or returning `Left` from
 reasons are passed to `cancel(reason)`: abort `signal.reason`, external error
 cause, or the fatal stream error.
 
-## capture — get a Left as a value instead of short-circuiting
+## raise.capture — keep an outcome local instead of short-circuiting
 
 ```ts
-capture<E, A>(e: Either<E, A>): Right<Either<E, A>>
+raise.capture<E, A>(e: Either<E, A>): Either<E, A>
 ```
 
 ```ts
-const result = either(function* (raise) {
-  const cached = yield* capture(getUserFromCache(id)) // does NOT short-circuit
+const result = either(function* ({ raise }) {
+  const cached = raise.capture(getUserFromCache(id)) // identity; does NOT short-circuit
   if (cached._tag === 'Right') return cached.value
   if (cached.error !== 'CacheMiss') return raise(cached.error)
   return yield* getUserFromDatabase(id)
 })
 ```
+
+Pass a thunk or promise to capture thrown/rejected work. Raw successes become
+`Right`, returned Eithers are flattened, and throws/rejections become
+`Left<Rejected>`. Do not `yield*` a captured outcome unless you deliberately
+want to propagate it.
 
 ## validate — accumulate ALL errors
 
@@ -429,7 +469,7 @@ foldAsync(gen: AsyncGenerator<Eff, Ret>, strategy): Promise<R>
 
 ## Build-time transform (optional, recommended for hot paths)
 
-`yeet` ships an unplugin that lowers `either` / `validate` / `firstOf` / `collect` generators into plain branches at build time — `const x = yield* f()` becomes `const t = f(); if (t._tag === 'Left') return t; const x = t.value`. This removes generator allocation/resume/close overhead entirely. Inside lowered `either`, direct `right`, `left`, `capture`, `ensure`, and `ensureNotNull` steps are fused too, so their intermediate Either is never created. Immutable `const` aliases initialized by Either-producing calls and destructured `{ raise }` / `{ raise: fail }` parameters are supported. It is optional: code runs correctly without it; the transform only changes performance, not behavior.
+`yeet` ships an unplugin that lowers `either` / `validate` / `firstOf` / `collect` generators into plain branches at build time — `const x = yield* f()` becomes `const t = f(); if (t._tag === 'Left') return t; const x = t.value`. This removes generator allocation/resume/close overhead entirely. Inside lowered `either`, direct `right`, `left`, `ensure`, and `ensureNotNull` steps are fused too, so their intermediate Either is never created. Local `raise.capture(...)` boundaries, immutable `const` aliases initialized by Either-producing calls, and destructured `{ raise }` / `{ raise: fail }` parameters are supported. It is optional: code runs correctly without it; the transform only changes performance, not behavior.
 
 ```ts
 // vite.config.ts
@@ -448,11 +488,11 @@ A call is lowered only when it is a direct `either(function* () { ... })` litera
 - Use `return raise(error)` for typed early exit. `raise` is the generator's first parameter. `raise('X')` alone (without `return`) just builds a `Left`; you usually `return` it.
 - Don't annotate the error type — it is inferred. Use `as const` on string-literal errors when you want a narrow literal type: `return raise('Inactive' as const)`.
 - Async: `const x = yield* await fetchThing()` where `fetchThing` returns `Promise<Either>`. Wrap raw promises and throwing starts with `raise(...)` so rejections/throws become `Left<Rejected>`.
-- Scoped child work: inside async `either`, destructure `{ signal }` and use `signal.fork((signal) => task(signal))`, `yield* await signal.forkAll([...])`, `yield* await signal.forkFirst([...])`, or `yield* await signal.forkRace([...])`; these keep child work under the current generator. `forkFirst` waits for the first `Right`; `forkRace` takes the first outcome.
+- Scoped child work: inside async `either`, destructure `{ signal }` and use `signal.fork((signal) => task(signal))`, `yield* await signal.forkAll([...])`, `yield* await signal.forkFirst([...])`, `yield* await signal.forkRace([...])`, or `signal.forkEach(items, { concurrency }, task)`; these keep child work under the current generator. `forkFirst` waits for the first `Right`; `forkRace` takes the first outcome; `forkEach` yields bounded completions in settlement order.
 - Streams: import helpers from `@big-time/yeet/stream`, not the root. Use `collectText` / `consume` for hot text-delta drains, and `for await (const next of ndjson(...) | sse(...)) { const item = yield* next }` for structured streams.
 - Optimizer: stream helpers in non-abortable `either(async function* ...)` compose with the transform (`yield* await json(...)`, `yield* await collectText(...)`, and `yield* next` where `next` is a `const` item from yeet `ndjson` / `sse` / `lines` / `chunks`). Abortable `either(signal, ...)` stays on the runtime driver.
 - Check results with `isLeft` / `isRight` or `result._tag === 'Left'`.
-- Choose the runner by intent: `either` (stop on first error), `validate` (collect all errors), `firstOf` (first success), `collect` / `collectAll` (partition), `all` (concurrent, first error or tuple), `capture` (treat a `Left` as a value).
+- Choose the runner by intent: `either` (stop on first error), `validate` (collect all errors), `firstOf` (first success), `collect` / `collectAll` (partition), and `all` (concurrent, first error or tuple). Use `raise.capture` for a local outcome boundary.
 - Avoid `this` / `arguments` inside `either` generators (also disables the build-time transform).
 - ESM only; import from `@big-time/yeet`.
 
@@ -460,14 +500,16 @@ A call is lowered only when it is a direct `either(function* () { ... })` litera
 
 ```
 left right isLeft isRight
-either capture validate firstOf collect all collectAll
-ensure ensureNotNull raise siblingSettled suppressed
+either validate firstOf collect all collectAll
+ensure ensureNotNull raise siblingSettled forkEachStopped suppressed
 fromJSON isSerializedEither serializedEitherSchema eitherSchema
 exitErrorSchema serializedExitSchema exitSchema
 fold foldAsync
 stream subpath: bytes text json chunks consume collectText lines ndjson sse
-types: Either, Left, Right, Rejected, Aborted, SiblingSettled, Suppressed, Check, Raise, Strategy, Step,
-       SerializedEither, SerializedLeft, SerializedRight, Collected, InferE, InferA,
+types: Either, Left, Right, Rejected, Aborted, SiblingSettled, ForkEachStopped,
+       ForkEachOptions, ForkEachTask, ForkEachCompletion, ForkEachIterator,
+       Suppressed, Check, Raise, Strategy, Step, SerializedEither,
+       SerializedLeft, SerializedRight, Collected, InferE, InferA,
        StreamError, StreamReadError, StreamExternalError, StreamConsumerError,
        StreamTooLarge, TextTooLarge, LineTooLarge, InvalidChunk, DecodeError,
        ParseError, ByteSource, StreamSource, SseEvent, RaiseContext, ScopeSignal,

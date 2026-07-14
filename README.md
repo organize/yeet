@@ -1,7 +1,7 @@
 # yeet
 
-> Dependency-free. Tree-shakeable. Side-effect free. About 4.1 kB gzipped for
-> the core, with stream helpers on a separate 2.9 kB subpath.
+> Dependency-free. Tree-shakeable. Side-effect free. About 5.0 kB gzipped for
+> the core, with stream helpers on a separate 3.1 kB subpath.
 
 `yeet` is what happens when `Either` stops being a ceremonial robe and starts
 doing field work.
@@ -60,6 +60,593 @@ built.
 The runtime stays tiny. The source stays boring in the best way. The types do
 the remembering.
 
+## What Do You Think This Program Prints?
+
+Suppose finance sends malformed NDJSON over a chunked Web Stream. Each valid
+claim enters a bounded pool. Every worker opens a transaction, hedges three AI
+providers, races two policy systems, checks the ledger concurrently, and parses
+an SSE rationale. Then the CEO performs a live demo while a cancelled GPU
+claim's rollback also fails.
+
+This is not a hypothetical sentence we expected to write.
+
+<details>
+<summary><strong>Open <code>nightmare.mts</code>, the whole regrettable program</strong></summary>
+
+```ts
+import {
+  type Either,
+  type ScopeSignal,
+  either,
+  exitSchema,
+  left,
+  raise,
+  right,
+} from '@big-time/yeet'
+import { ndjson, sse } from '@big-time/yeet/stream'
+
+// Run with `bun nightmare.mts` or `node nightmare.mts`.
+// This is one scenario. Every architectural decision was made under duress.
+
+type Expense = {
+  readonly id: string
+  readonly employee: string
+  readonly description: string
+  readonly cents: number
+  readonly mode: 'normal' | 'gpu' | 'demo' | 'late'
+}
+type AuditEvent = {
+  readonly at: number
+  readonly claim?: string
+  readonly message: string
+  readonly detail?: unknown
+}
+type SourceState = {
+  pulls: number
+  bytesServed: number
+  totalBytes: number
+  fullDrainPulls: number
+  cancelled: boolean
+  cancelReason: unknown
+}
+
+const PROCUREMENT_JITTER = [7, 3, 19, 2, 31] as const
+
+const started = performance.now()
+const audit: AuditEvent[] = []
+const sourceState: SourceState = {
+  pulls: 0,
+  bytesServed: 0,
+  totalBytes: 0,
+  fullDrainPulls: 0,
+  cancelled: false,
+  cancelReason: undefined,
+}
+
+console.log(`
+┌────────────────────────────────────────────────────────────────────┐
+│  QUARTERLY SYNERGY RECONCILIATION ENGINE                           │
+│  "AI-native expense approval for organizations that fear sleep"    │
+└────────────────────────────────────────────────────────────────────┘
+`)
+
+const expenseFeed = [
+  {
+    id: 'lunch',
+    employee: 'Mira',
+    description: 'team lunch, no strategic mayonnaise',
+    cents: 8_400,
+    mode: 'normal',
+  },
+  {
+    id: 'gpu',
+    employee: 'Noah',
+    description: 'eight GPUs filed as ergonomic stationery',
+    cents: 4_200_000,
+    mode: 'gpu',
+  },
+  '{ "id": "finance", "employee": "Lin", this is not JSON at all }',
+  {
+    id: 'demo',
+    employee: 'CEO',
+    description: 'live demo on production during the board meeting',
+    cents: 0,
+    mode: 'demo',
+  },
+  {
+    id: 'late-1',
+    employee: 'Iris',
+    description: 'hotel minibar classified as distributed systems research',
+    cents: 32_000,
+    mode: 'late',
+  },
+  {
+    id: 'late-2',
+    employee: 'Omar',
+    description: 'consulting invoice from a company incorporated yesterday',
+    cents: 900_000,
+    mode: 'late',
+  },
+  ...Array.from({ length: 40 }, (_, index) => ({
+    id: `backlog-${index}`,
+    employee: 'Procurement',
+    description: `purchase order ${index} awaiting one final-final signature`,
+    cents: 99_999,
+    mode: 'late' as const,
+  })),
+]
+  .map((line) => (typeof line === 'string' ? line : JSON.stringify(line)))
+  .join('\n')
+
+const source = kafkaOverFax(expenseFeed, sourceState)
+const recoverableFailures: unknown[] = []
+const approved: unknown[] = []
+
+const result = await either(async function* ({ signal }) {
+  log('The quarterly batch begins. Nobody has checked the calendar.')
+
+  await using completions = signal.forkEach(
+    ndjson(source),
+    { concurrency: 3 },
+    async (row, child, index) => {
+      if (row._tag === 'Left') {
+        log('The fax emitted syntax. Finance calls this schema evolution.', {
+          index,
+          error: tag(row.error),
+        })
+        return row
+      }
+      const expense = row.value as Expense
+      try {
+        return await adjudicateExpense(expense, child)
+      } catch (cause) {
+        log('The task escaped by throwing furniture.', { cause }, expense.id)
+        throw cause
+      }
+    },
+  )
+
+  for await (const completion of completions) {
+    const outcome = completion.result
+    if (outcome._tag === 'Right') {
+      approved.push(outcome.value)
+      log('A claim escaped the machine with paperwork.', {
+        index: completion.index,
+        value: outcome.value,
+      })
+      continue
+    }
+    if (tag(outcome.error) === 'ParseError') {
+      recoverableFailures.push(outcome.error)
+      log('Malformed input was downgraded from incident to personality.', {
+        index: completion.index,
+      })
+      continue
+    }
+
+    log('A non-recoverable business truth has entered the chat.', {
+      index: completion.index,
+      error: outcome.error,
+    })
+    yield* outcome
+  }
+
+  return {
+    status: 'somehow approved everything',
+    approved,
+    recoverableFailures,
+  } as const
+})
+
+log('The outer Either settled. Legal has requested the full stack trace.')
+
+const anythingSchema = {
+  '~standard': {
+    version: 1 as const,
+    vendor: 'quarterly-synergy-reconciliation',
+    validate(value: unknown) {
+      return value !== undefined
+        ? { value }
+        : { issues: [{ message: 'Even nonsense must exist' }] }
+    },
+  },
+}
+const wireSchema = exitSchema({
+  error: anythingSchema,
+  reason: anythingSchema,
+  cause: anythingSchema,
+  value: anythingSchema,
+})
+const wire = JSON.stringify(result)
+const hydrated = await wireSchema['~standard'].validate(JSON.parse(wire))
+const rollbackThrew = audit.some(
+  ({ message, detail }) =>
+    message === 'The task escaped by throwing furniture.' &&
+    JSON.stringify(detail).includes('RollbackFailed'),
+)
+const rollbackReachedLegal = wire.includes('RollbackFailed')
+
+console.log('\nAUDIT TRAIL')
+console.table(
+  audit.map(({ at, claim, message }) => ({
+    ms: at,
+    claim: claim ?? '-',
+    event: message,
+  })),
+)
+console.log('\nFINAL MEMO FROM LEGAL')
+console.dir(result.toJSON(), { depth: 10, colors: true })
+console.log('\nTRANSPORT ENVELOPE')
+console.log(wire)
+console.log('\nPOST-MORTEM')
+console.log('  approved before impact :', approved.length)
+console.log('  malformed but tolerated:', recoverableFailures.length)
+console.log('  source pulls            :', sourceState.pulls)
+console.log(
+  '  source bytes served     :',
+  `${sourceState.bytesServed} / ${sourceState.totalBytes}`,
+)
+console.log('  full-drain pulls        :', sourceState.fullDrainPulls)
+console.log('  source cancelled        :', sourceState.cancelled)
+console.log('  source cancel reason    :', tag(sourceState.cancelReason))
+console.log(
+  '  final result             :',
+  result._tag === 'Left' ? tag(result.error) : 'Right, somehow',
+)
+console.log(
+  '  wire rehydrated          :',
+  hydrated.issues === undefined ? 'yes' : 'no, even the wire resigned',
+)
+console.log('  GPU rollback threw      :', rollbackThrew ? 'yes' : 'no')
+console.log(
+  '  GPU rollback in memo    :',
+  rollbackReachedLegal ? 'yes' : 'NO. LEGAL HAS MISPLACED A FAILURE.',
+)
+console.log(
+  '\nAt no point was this architecture approved by finance. This is why it passed finance.',
+)
+
+async function adjudicateExpense(
+  expense: Expense,
+  signal: ScopeSignal,
+): Promise<Either<unknown, unknown>> {
+  log(
+    'Opening a transaction, a model socket, and several questions.',
+    undefined,
+    expense.id,
+  )
+  await using transaction = transactionFor(expense, signal)
+  await using _modelSocket = modelSocketFor(expense, signal)
+
+  const cached = raise.capture(() => readDecisionCache(expense))
+  log(
+    cached._tag === 'Right'
+      ? 'The cache remembered a decision. Nobody remembers writing it.'
+      : 'The cache has chosen honesty.',
+    cached._tag === 'Right' ? cached.value : cached.error,
+    expense.id,
+  )
+
+  const combined = await signal.forkAll([
+    async (child) => {
+      const provider = await child.forkFirst([
+        async () => {
+          await microticks(expense.id === 'demo' ? 2 : 1)
+          return left({
+            _tag: 'OpenAIUnavailable' as const,
+            explanation: 'capacity has become a philosophical concept',
+          })
+        },
+        async () => {
+          // The GPU claim deliberately lets local-model win this hedge.
+          await microticks(expense.id === 'gpu' ? 3 : 1)
+          return right({
+            provider: 'Anthropic',
+            category:
+              expense.mode === 'gpu' ? 'office supplies' : 'probably lunch',
+          })
+        },
+        async () => {
+          await microticks(2)
+          return right({
+            provider: 'local-model',
+            category: JSON.parse('"the intern said yes"') as string,
+          })
+        },
+      ] as const)
+      return provider
+    },
+    async (child) =>
+      await child.forkRace([
+        async () => {
+          await microticks(1)
+          return right({
+            policy: 'v7-final-FINAL-use-this-one',
+            allowed: expense.cents < 1_000_000,
+          })
+        },
+        async (loser) =>
+          await waitForAbort(loser, {
+            _tag: 'PolicyCommitteeAdjourned' as const,
+          }),
+      ] as const),
+    async () => {
+      await microticks(1)
+      return right({
+        ledgerBalance: 14,
+        confidence: 'rounded up from 0.02',
+      })
+    },
+  ] as const)
+
+  if (combined._tag === 'Left') return combined
+  const [classification, policy, ledger] = combined.value
+  log(
+    'Three systems agree, using three definitions of agree.',
+    { classification, policy, ledger },
+    expense.id,
+  )
+
+  const rationale: string[] = []
+  for await (const event of sse(
+    aiRationaleStream(expense, classification.provider, signal),
+    { signal },
+  )) {
+    if (event._tag === 'Left') return event
+    rationale.push(event.value.data)
+  }
+
+  if (expense.mode === 'gpu' || expense.mode === 'late') {
+    log(
+      'This claim will remain pending until causality intervenes.',
+      undefined,
+      expense.id,
+    )
+    await waitUntilAborted(signal)
+    return left({
+      _tag: 'ClaimStopped' as const,
+      claim: expense.id,
+      reason: signal.reason,
+    })
+  }
+
+  if (expense.mode === 'demo') {
+    await microticks(2)
+    log(
+      'The phrase "live demo" reached the production database.',
+      undefined,
+      expense.id,
+    )
+    return left({
+      _tag: 'LiveDemoDetected' as const,
+      claim: expense.id,
+      action: 'cancel everything including the meeting',
+      rationale,
+    })
+  }
+
+  transaction.commit()
+  return right({
+    claim: expense.id,
+    approvedBy: classification.provider,
+    policy: policy.policy,
+    rationale: rationale.join(' '),
+  })
+}
+
+function transactionFor(expense: Expense, signal: ScopeSignal) {
+  let committed = false
+  log('BEGIN TRANSACTION', undefined, expense.id)
+  return {
+    commit() {
+      committed = true
+      log('COMMIT, allegedly.', undefined, expense.id)
+    },
+    async [Symbol.asyncDispose]() {
+      await microticks(1)
+      if (committed) return
+      log('ROLLBACK requested.', { reason: signal.reason }, expense.id)
+      if (expense.mode === 'gpu' && signal.aborted) {
+        throw {
+          _tag: 'RollbackFailed',
+          claim: expense.id,
+          detail: 'the transaction achieved tenure',
+        }
+      }
+      log(
+        'ROLLBACK completed with theatrical reluctance.',
+        undefined,
+        expense.id,
+      )
+    },
+  }
+}
+
+function modelSocketFor(expense: Expense, signal: ScopeSignal) {
+  log('Opening model socket.', undefined, expense.id)
+  return {
+    async [Symbol.asyncDispose]() {
+      await microticks(1)
+      log(
+        'Closing model socket.',
+        signal.aborted ? { because: signal.reason } : { because: 'work ended' },
+        expense.id,
+      )
+    },
+  }
+}
+
+function readDecisionCache(expense: Expense): Either<unknown, string> {
+  if (expense.id === 'lunch') return right('approved in 2024 by a deleted user')
+  if (expense.id === 'demo')
+    throw {
+      _tag: 'RedisHasLeftTheBuilding',
+      host: 'cache-final-final-2.internal',
+    }
+  return left({ _tag: 'CacheMiss', key: expense.id })
+}
+
+function aiRationaleStream(
+  expense: Expense,
+  provider: string,
+  signal: AbortSignal,
+): ReadableStream<Uint8Array> {
+  const lines = [
+    'event: thought',
+    `data: consulted ${provider}`,
+    '',
+    'event: thought',
+    `data: converted ${expense.cents} cents into strategic confidence`,
+    '',
+  ].join('\n')
+  const bytes = new TextEncoder().encode(lines)
+  let offset = 0
+  return new ReadableStream({
+    async pull(controller) {
+      await microticks(1)
+      if (signal.aborted) return controller.error(signal.reason)
+      if (offset >= bytes.length) return controller.close()
+      const end = Math.min(offset + 11, bytes.length)
+      controller.enqueue(bytes.slice(offset, end))
+      offset = end
+    },
+    cancel(reason) {
+      log('AI rationale stream cancelled.', { reason }, expense.id)
+    },
+  })
+}
+
+function kafkaOverFax(
+  body: string,
+  state: SourceState,
+): ReadableStream<Uint8Array> {
+  const bytes = new TextEncoder().encode(body)
+  let offset = 0
+  state.totalBytes = bytes.byteLength
+  state.fullDrainPulls = pullsToDrain(bytes.byteLength)
+  return new ReadableStream({
+    async pull(controller) {
+      state.pulls++
+      await microticks(1)
+      if (offset >= bytes.length) return controller.close()
+      const procurementJitter =
+        PROCUREMENT_JITTER[state.pulls % PROCUREMENT_JITTER.length]
+      const end = Math.min(offset + procurementJitter, bytes.length)
+      controller.enqueue(bytes.slice(offset, end))
+      offset = end
+      state.bytesServed = offset
+    },
+    cancel(reason) {
+      state.cancelled = true
+      state.cancelReason = reason
+      log('Kafka-over-fax source cancelled.', { reason })
+    },
+  })
+}
+
+function pullsToDrain(bytes: number): number {
+  let pulls = 0
+  let served = 0
+  while (served < bytes) {
+    pulls++
+    served += PROCUREMENT_JITTER[pulls % PROCUREMENT_JITTER.length]
+  }
+  return pulls + 1
+}
+
+async function waitForAbort<E>(
+  signal: AbortSignal,
+  error: E,
+): Promise<Either<E, never>> {
+  if (signal.aborted) return left(error)
+  return new Promise((resolve) => {
+    signal.addEventListener('abort', () => resolve(left(error)), { once: true })
+  })
+}
+
+async function waitUntilAborted(signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return
+  return new Promise((resolve) => {
+    signal.addEventListener('abort', () => resolve(), { once: true })
+  })
+}
+
+async function microticks(count: number): Promise<void> {
+  for (let index = 0; index < count; index++) await Promise.resolve()
+}
+
+function tag(value: unknown): string {
+  if (typeof value === 'object' && value !== null && '_tag' in value) {
+    const found = Reflect.get(value, '_tag')
+    if (typeof found === 'string') return found
+  }
+  if (value instanceof Error) return value.name
+  return String(value)
+}
+
+function log(message: string, detail?: unknown, claim?: string): void {
+  audit.push({
+    at: Math.round((performance.now() - started) * 100) / 100,
+    claim,
+    message,
+    ...(detail === undefined ? {} : { detail }),
+  })
+}
+```
+
+</details>
+
+So, what prints?
+
+After an audit trail long enough to worry Legal, the entire incident is still
+one ordinary, serializable value. This stable tail was captured verbatim from
+an actual `bun nightmare.mts` run. Only the timestamped audit table and
+colorized `console.dir` immediately before it are omitted. The same tail was
+verified byte-for-byte on Node 26.2.0 and Bun 1.3.14.
+
+```text
+TRANSPORT ENVELOPE
+{"_tag":"Left","error":{"_tag":"Suppressed","error":{"_tag":"LiveDemoDetected","claim":"demo","action":"cancel everything including the meeting","rationale":["consulted Anthropic","converted 0 cents into strategic confidence"]},"suppressed":[{"_tag":"Rejected","cause":{"_tag":"RollbackFailed","claim":"gpu","detail":"the transaction achieved tenure"}}]}}
+
+POST-MORTEM
+  approved before impact : 1
+  malformed but tolerated: 1
+  source pulls            : 58
+  source bytes served     : 706 / 6345
+  full-drain pulls        : 513
+  source cancelled        : true
+  source cancel reason    : ForkEachStopped
+  final result             : Suppressed
+  wire rehydrated          : yes
+  GPU rollback threw      : yes
+  GPU rollback in memo    : yes
+
+At no point was this architecture approved by finance. This is why it passed finance.
+```
+
+The live demo remains the primary failure. `forkEach` cancels and awaits its
+unfinished workers and closes the unread stream. The GPU rollback failure and a
+concurrent stream-shutdown stay distinct: the rollback is a new teardown
+failure and remains attached; an already-errored reader echoing its exact
+cancellation reason is not counted twice. The result then survives JSON
+serialization and Standard Schema rehydration.
+
+The source served 706 of 6,345 bytes in 58 pulls. Draining the complete feed
+with the same deliberately terrible chunk schedule would require 513 pulls.
+That is backpressure reaching all the way through `forkEach`, `ndjson`, and the
+Web Stream to the byte source: forty backlog rows remained in the fax machine
+because no consumer asked for them.
+
+**Where did Iris's minibar go?** `late-1` was active inside its SSE reader when
+the demo failed. Its abort-driven stream `Left` is the outcome of a stopped
+sibling, not another failure of the parent. The GPU task follows the same rule:
+its `ClaimStopped` value is discarded, while its throwing rollback remains as
+a `Suppressed` cleanup failure. `late-2` never started at all; bounded
+`forkEach` closed the source before pulling it into the pool.
+
+No bespoke executor. No global error channel. No abandoned work. One value,
+with the whole unfortunate story still inside it.
+
 ## But I'm Scared
 
 Good. A library named `yeet` should earn your trust before it starts carrying
@@ -95,6 +682,7 @@ waits politely until you ask for it.
 
 ## Contents
 
+- [What Do You Think This Program Prints?](#what-do-you-think-this-program-prints)
 - [Install](#install)
 - [Quick Start](#quick-start)
 - [Core Model](#core-model)
@@ -384,12 +972,26 @@ type ScopeSignal = AbortSignal & {
   forkRace<const T extends readonly ScopeTask<any, any>[]>(
     tasks: T,
   ): Promise<Exit<ScopeTaskError<T[number]>, ScopeTaskValue<T[number]>>>
+  forkEach<Input, E, A>(
+    items: Iterable<Input> | AsyncIterable<Input>,
+    options: { readonly concurrency: number },
+    task: (
+      item: Input,
+      signal: ScopeSignal,
+      index: number,
+    ) => Either<E, A> | PromiseLike<Either<E, A>>,
+  ): AsyncIterableIterator<{
+    readonly item: Input
+    readonly index: number
+    readonly result: Exit<E, A>
+  }> &
+    AsyncDisposable
 }
 
 type Exit<E, A> = Either<E | Rejected | Aborted | Suppressed, A>
 
 type RaiseContext = Raise & {
-  readonly raise: Raise
+  readonly raise: RaiseContext
   readonly signal: ScopeSignal
 }
 
@@ -466,14 +1068,15 @@ care about, as above. TypeScript cannot see the error type of a detached fork
 that is started and never referenced again; JavaScript may be magical, but it is
 not yet clairvoyant.
 
-The four scoped methods answer four different questions:
+The five scoped methods answer five different questions:
 
-| Method                    | Returns when                        | Failure behavior                                          |
-| ------------------------- | ----------------------------------- | --------------------------------------------------------- |
-| `signal.fork(task)`       | That child settles                  | A `Left` or rejection fails the owning scope              |
-| `signal.forkAll(tasks)`   | Every child returns `Right`         | First failure cancels the remaining siblings              |
-| `signal.forkFirst(tasks)` | Any child returns `Right`           | Failures accumulate; exhaustion returns an ordered tuple  |
-| `signal.forkRace(tasks)`  | Any child returns `Right` or `Left` | The first outcome wins and cancels the remaining siblings |
+| Method                               | Returns when                        | Failure behavior                                          |
+| ------------------------------------ | ----------------------------------- | --------------------------------------------------------- |
+| `signal.fork(task)`                  | That child settles                  | A `Left` or rejection fails the owning scope              |
+| `signal.forkAll(tasks)`              | Every child returns `Right`         | First failure cancels the remaining siblings              |
+| `signal.forkFirst(tasks)`            | Any child returns `Right`           | Failures accumulate; exhaustion returns an ordered tuple  |
+| `signal.forkRace(tasks)`             | Any child returns `Right` or `Left` | The first outcome wins and cancels the remaining siblings |
+| `signal.forkEach(items, opts, task)` | The consumer asks for a completion  | Each outcome is data; stopping cancels unfinished work    |
 
 When the work is naturally a batch, use `signal.forkAll`. It starts every task
 with a child signal, returns values in input order, and cancels siblings on the
@@ -542,6 +1145,63 @@ const result = await either(async function* ({ signal }) {
 
 `signal.forkFirst([])` returns `Left([])`: there was no candidate that could
 possibly succeed, and no exceptional ceremony is required to say so.
+
+Use `signal.forkEach` when the input may be large, the fan-out must be bounded,
+and results should arrive as work finishes rather than in input order. The
+source is lazy, only one source pull is in flight, and `active tasks + buffered
+completions` never exceeds `concurrency`.
+
+```ts
+const result = await either(async function* ({ signal }) {
+  for await (const { item, result } of signal.forkEach(
+    documents,
+    { concurrency: 8 },
+    (document, signal, index) => embed(document, signal, index),
+  )) {
+    const embedding = yield* result
+    yield* await saveEmbedding(item.id, embedding)
+  }
+
+  return 'indexed' as const
+})
+
+// inferred:
+// Either<Aborted | Rejected | EmbedError | SaveError, 'indexed'>
+```
+
+Each completion is `{ item, index, result }`, so out-of-order work never loses
+its identity. `result` is an `Exit`: `yield* result` for fail-fast behavior, or
+inspect it and keep going when one bad item should not dismiss the whole class.
+
+```ts
+const result = await either(async function* ({ signal }) {
+  const failures: { replica: Replica; error: ExitError<ReplicaError> }[] = []
+
+  for await (const { item: replica, result } of signal.forkEach(
+    replicas,
+    { concurrency: 4 },
+    (replica, signal) => refreshReplica(replica, signal),
+  )) {
+    if (result._tag === 'Left') {
+      failures.push({ replica, error: result.error })
+      continue
+    }
+    publishFreshReplica(replica, result.value)
+  }
+
+  return failures
+})
+
+// inferred:
+// Either<Aborted | Rejected, { replica: Replica; error: ExitError<ReplicaError> }[]>
+```
+
+Breaking the loop, calling `.return()`, or disposing the iterator with
+`await using` closes the input and aborts unfinished children with
+`forkEachStopped()` (`{ _tag: 'ForkEachStopped' }`). Yeet waits for both source
+and child teardown before settling. As ever, cancellation is cooperative: a
+source pull or mapper that ignores its signal and never settles can delay that
+close forever.
 
 Use `signal.forkRace` when the first typed outcome wins. A winning `Right`
 aborts the losers with `siblingSettled()` (`{ _tag: 'SiblingSettled' }`) without
@@ -777,14 +1437,14 @@ The helpers in this section are still just functions. No DSL hatch opens in the
 ceiling. They cover the cases where plain short-circuiting is not quite the
 story you want to tell.
 
-| Helper               | What It Does                                                                  |
-| -------------------- | ----------------------------------------------------------------------------- |
-| `capture(either)`    | Treat a `Left` as ordinary data inside `either`                               |
-| `all(inputs)`        | Start independent sync/async inputs together and short-circuit by input order |
-| `collectAll(inputs)` | Start independent inputs together and partition successes/failures            |
-| `validate(fn)`       | Run every check and accumulate all errors                                     |
-| `firstOf(fn)`        | Return the first successful yielded `Either`                                  |
-| `collect(fn)`        | Partition every yielded `Either` into `{ values, errors }`                    |
+| Helper                | What It Does                                                                  |
+| --------------------- | ----------------------------------------------------------------------------- |
+| `raise.capture(work)` | Capture an outcome as data without short-circuiting                           |
+| `all(inputs)`         | Start independent sync/async inputs together and short-circuit by input order |
+| `collectAll(inputs)`  | Start independent inputs together and partition successes/failures            |
+| `validate(fn)`        | Run every check and accumulate all errors                                     |
+| `firstOf(fn)`         | Return the first successful yielded `Either`                                  |
+| `collect(fn)`         | Partition every yielded `Either` into `{ values, errors }`                    |
 
 ### Capture Instead Of Short-Circuit
 
@@ -793,10 +1453,11 @@ want to catch that `Left` as data: retry, log, ignore, or decide whether to
 re-raise it yourself.
 
 ```ts
-import { capture, either } from '@big-time/yeet'
+import { either } from '@big-time/yeet'
 
-const result = either(function* (raise) {
-  const cached = yield* capture(getUserFromCache(id))
+const result = either(function* ({ raise }) {
+  const cached = raise.capture(getUserFromCache(id))
+  // inferred: Either<CacheError, User>
 
   if (cached._tag === 'Right') {
     return cached.value
@@ -812,9 +1473,27 @@ const result = either(function* (raise) {
 // inferred: Either<CacheError | DatabaseError, User>
 ```
 
-`capture(either)` returns `Right<Either<E, A>>`, so the outer `either(...)`
-unwraps the `Right` and hands you the original `Either` as an ordinary value. A
-small trapdoor, tastefully installed.
+An existing `Either` passes through by identity, with no wrapper allocation.
+For work that can throw or reject, give `raise.capture` a thunk or promise:
+
+```ts
+const result = await either(async function* ({ raise, signal }) {
+  const attempt = await raise.capture(() => askPrimary(prompt, signal))
+  // inferred: Either<ProviderError | Rejected, Completion>
+
+  if (attempt._tag === 'Right') return attempt.value
+
+  logProviderFailure(attempt.error)
+  return yield* await askFallback(prompt, signal)
+})
+// inferred: Promise<Either<FallbackError, Completion>>
+```
+
+Raw successes become `Right`, returned `Either`s are flattened, and synchronous
+throws or promise rejections become `Left<Rejected>`. Nothing short-circuits
+until you explicitly `yield*` or return the captured outcome. Thus an observed
+provider failure does not haunt the outer error union merely because you looked
+at it.
 
 ### Concurrent Inputs With `all`
 
@@ -1224,10 +1903,11 @@ software that enjoys receiving small rectangles of truth.
 Yeet ships an optional unplugin optimizer. Your source stays the same; the
 plugin looks for inline generator calls to `either`, `validate`, `firstOf`, and
 `collect` that it can prove, then lowers them into plain early-return or
-accumulator JavaScript. It also fuses yeet's own constructors, guards, and
-`capture` when they are consumed immediately, removing intermediate `Either`
-values as well as the generator. If it cannot prove the shape, it leaves the
-original runtime call exactly where it found it.
+accumulator JavaScript. It also fuses yeet's own constructors and guards when
+they are consumed immediately, removing intermediate `Either` values as well
+as the generator. `raise.capture(...)` is understood as a local outcome
+boundary in lowered generators. If the plugin cannot prove the shape, it leaves
+the original runtime call exactly where it found it.
 
 No spooky action at a distance. Just a little stagehand moving furniture before
 the curtain rises.
@@ -1270,18 +1950,12 @@ The optimizer understands a few yeet primitives deeply enough to erase the
 whole produce-then-consume boundary:
 
 ```ts
-import {
-  capture,
-  either,
-  ensure,
-  ensureNotNull,
-  type Either,
-} from '@big-time/yeet'
+import { either, ensure, ensureNotNull, type Either } from '@big-time/yeet'
 
-const result = either(function* () {
+const result = either(function* ({ raise }) {
   const id = yield* ensureNotNull(input.id, () => 'MissingId' as const)
   yield* ensure(id.length > 0, () => 'EmptyId' as const)
-  const cached = yield* capture(readCache(id))
+  const cached = raise.capture(readCache(id))
   return { id, cached }
 })
 // inferred:
@@ -1319,9 +1993,11 @@ It lowers these proven shapes:
 
 - direct `yield* someEither()` steps in `either`
 - immutable `const` aliases initialized from a proven Either-producing call
-- direct `yield* right(...)`, `yield* left(...)`, `yield* capture(...)`,
-  `yield* ensure(...)`, and `yield* ensureNotNull(...)` steps, with unnecessary
-  intermediate `Either` values fused away
+- direct `yield* right(...)`, `yield* left(...)`, `yield* ensure(...)`, and
+  `yield* ensureNotNull(...)` steps, with unnecessary intermediate `Either`
+  values fused away
+- local `raise.capture(...)` outcome boundaries through either `raise` or
+  `{ raise }` callback parameters
 - direct `yield* await somePromiseReturningEither()` steps in async `either`,
   including bounded stream helpers like `json(body)` and `collectText(stream)`
 - direct `yield* next` steps where `next` is a `const` binding from
@@ -1347,8 +2023,8 @@ JIT's morning mood, but the shape is the useful part:
 | `firstOf`: three attempts                       | `~10-11x` |
 | Fused guards: success                           | `~15x`    |
 | Fused guards: `Left`                            | `~28x`    |
-| Fused `capture`: cached `Right`                 | `~21x`    |
-| Fused `capture`: `Left` then fallback           | `~15x`    |
+| `raise.capture`: cached `Right`                 | `~20x`    |
+| `raise.capture`: `Left` then fallback           | `~19x`    |
 | Stream: `yield* await json(body)`               | `~2.6x`   |
 | Stream: `yield* next` in `ndjson` / `sse` loops | `~1.2x`   |
 | `collect`: many yielded items                   | `~1x`     |
@@ -1405,7 +2081,6 @@ the keys to the old truck.
 | ------------------------- | ------------------------------------------------------------------ |
 | `either(fn)`              | Short-circuiting sync or async generator runner                    |
 | `either(signal, asyncFn)` | Abort-aware async runner; `asyncFn` receives a scoped `AbortRaise` |
-| `capture(either)`         | Preserve a `Left` as data inside `either`                          |
 | `validate(fn)`            | Accumulate every yielded error                                     |
 | `firstOf(fn)`             | Return the first yielded `Right`                                   |
 | `collect(fn)`             | Partition yielded values into errors and values                    |
@@ -1420,6 +2095,7 @@ the keys to the old truck.
 | `signal.forkAll(tasks)`   | Run signal-aware child tasks and cancel siblings on first failure    |
 | `signal.forkFirst(tasks)` | Return the first child `Right`, or every error in input order        |
 | `signal.forkRace(tasks)`  | Return the first child outcome and abort losing tasks                |
+| `signal.forkEach(...)`    | Lazily map bounded child work and yield outcomes in settlement order |
 
 ### Guards And Async Helpers
 
@@ -1430,9 +2106,11 @@ the keys to the old truck.
 | `raise(error)`                 | Create a typed early return value                                  |
 | `raise(fn)`                    | Capture synchronous throw or promise rejection as `Left<Rejected>` |
 | `raise(promiseLike)`           | Capture promise rejection as `Left<Rejected>`                      |
+| `raise.capture(work)`          | Capture and flatten an outcome without short-circuiting            |
 | `aborted(reason)`              | Create an `Aborted` error payload                                  |
 | `rejected(cause)`              | Create a `Rejected` error payload                                  |
 | `siblingSettled()`             | Get the race-loser cancellation reason singleton                   |
+| `forkEachStopped()`            | Get the stopped-completion-stream reason singleton                 |
 | `suppressed(error, failures)`  | Create a `Suppressed` cleanup-failure payload                      |
 
 ### Serialization And Schemas
