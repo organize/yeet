@@ -226,7 +226,7 @@ describe('yeet unplugin transform', () => {
 
   it('fuses yeet primitives consumed directly by yield*', async () => {
     const body = `
-      import { capture, ensure, ensureNotNull } from ${JSON.stringify(YEET_SOURCE)}
+      import { ensure, ensureNotNull } from ${JSON.stringify(YEET_SOURCE)}
 
       export function run(input) {
         const events = []
@@ -253,9 +253,6 @@ describe('yeet unplugin transform', () => {
               }
             ),
           )
-          const captured = yield* capture(
-            input.cached ? right('cache') : left('CacheMiss'),
-          )
           try {
             if (input.stop) {
               yield* left('Stopped')
@@ -263,7 +260,7 @@ describe('yeet unplugin transform', () => {
           } finally {
             events.push('finally')
           }
-          return { value, captured }
+          return { value }
         })
 
         return { result, events }
@@ -271,15 +268,15 @@ describe('yeet unplugin transform', () => {
     `
 
     for (const input of [
-      { value: 'ok', allowed: true, cached: true, stop: false },
-      { value: 'ok', allowed: false, cached: false, stop: false },
-      { value: null, allowed: true, cached: false, stop: false },
-      { value: 'ok', allowed: true, cached: false, stop: true },
+      { value: 'ok', allowed: true, stop: false },
+      { value: 'ok', allowed: false, stop: false },
+      { value: null, allowed: true, stop: false },
+      { value: 'ok', allowed: true, stop: true },
     ]) {
       const { runtime, optimized, code } = await runBoth(body, [input])
       expect(simplify(optimized)).toEqual(simplify(runtime))
       expect(code).not.toContain('yield*')
-      expect(code).not.toMatch(/\b(?:capture|ensure|ensureNotNull)\(/)
+      expect(code).not.toMatch(/\b(?:ensure|ensureNotNull)\(/)
     }
   })
 
@@ -308,7 +305,6 @@ describe('yeet unplugin transform', () => {
       import {
         either,
         right as succeed,
-        capture as hold,
         ensure as guard,
         ensureNotNull as present,
       } from '@big-time/yeet'
@@ -317,14 +313,14 @@ describe('yeet unplugin transform', () => {
         const initial = yield* succeed(41)
         yield* guard(initial > 0, () => 'Invalid')
         const value = yield* present(initial, () => 'Missing')
-        return yield* hold(succeed(value + 1))
+        return yield* succeed(value + 1)
       })
     `
 
     const transformed = transformYeet(source, 'fixture.ts')
 
     expect(transformed?.optimized).toBe(1)
-    expect(transformed?.code).not.toMatch(/\b(?:hold|guard|present)\(/)
+    expect(transformed?.code).not.toMatch(/\b(?:guard|present)\(/)
   })
 
   it('lowers immutable Either aliases but not mutable bindings', async () => {
@@ -601,6 +597,30 @@ describe('yeet unplugin transform', () => {
     const { runtime, optimized } = await runBoth(body)
 
     expect(simplifyEither(optimized)).toEqual(simplifyEither(runtime))
+  })
+
+  it('lowers raise.capture without changing its local outcome boundary', async () => {
+    const body = `
+      export async function run(mode) {
+        return either(async function* ({ raise }) {
+          const attempt = await raise.capture(() => {
+            if (mode === 'left') return left('Unavailable')
+            if (mode === 'reject') return Promise.reject(new Error('offline'))
+            return Promise.resolve(right('ready'))
+          })
+
+          if (attempt._tag === 'Left') return 'fallback:' + attempt.error._tag
+          return attempt.value
+        })
+      }
+    `
+
+    for (const mode of ['right', 'left', 'reject']) {
+      const { runtime, optimized, code } = await runBoth(body, [mode])
+      expect(simplifyEither(optimized)).toEqual(simplifyEither(runtime))
+      expect(code).not.toContain('function*')
+      expect(code).toContain('.capture')
+    }
   })
 
   it('matches runtime behavior for validate accumulation', async () => {

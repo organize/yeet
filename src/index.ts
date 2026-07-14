@@ -45,6 +45,11 @@ export type {
   AbortRaise,
   Exit,
   ExitError,
+  ForkEachCompletion,
+  ForkEachIterator,
+  ForkEachOptions,
+  ForkEachStopped,
+  ForkEachTask,
   RaiseContext,
   Rejected,
   Raise,
@@ -59,6 +64,7 @@ export type {
 } from './async.ts'
 export {
   aborted,
+  forkEachStopped,
   rejected,
   raise,
   siblingSettled,
@@ -77,7 +83,6 @@ export type {
 } from './combinators.ts'
 export {
   either,
-  capture,
   validate,
   firstOf,
   collect,

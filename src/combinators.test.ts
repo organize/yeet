@@ -4,13 +4,15 @@ import {
   type Aborted,
   type Exit,
   type ExitError,
+  type ForkEachIterator,
   type Rejected,
   type ScopeTask,
+  forkEachStopped,
+  raise,
   siblingSettled,
 } from './async.ts'
 import {
   either,
-  capture,
   validate,
   firstOf,
   collect,
@@ -392,23 +394,26 @@ describe('either scoped signal', () => {
     const events: string[] = []
     const reasons: unknown[] = []
 
-    const result = await either(async function* ({ signal }) {
-      const slow = signal.fork(async (child) => {
-        events.push('slow:start')
-        const result = await abortAsLeft(child, 'SlowAborted' as const)
-        reasons.push(child.reason)
-        events.push('slow:aborted')
-        return result
-      })
+    const result = await either(
+      // oxlint-disable-next-line require-yield
+      async function* ({ signal }) {
+        const slow = signal.fork(async (child) => {
+          events.push('slow:start')
+          const result = await abortAsLeft(child, 'SlowAborted' as const)
+          reasons.push(child.reason)
+          events.push('slow:aborted')
+          return result
+        })
 
-      void signal.fork(() => {
-        events.push('fail')
-        return left('Boom' as const)
-      })
+        void signal.fork(() => {
+          events.push('fail')
+          return left('Boom' as const)
+        })
 
-      yield* await slow
-      return 'done' as const
-    })
+        yield* await slow
+        return 'done' as const
+      },
+    )
 
     expectLeft(result as Either<unknown, unknown>, 'Boom')
     expect(events).toEqual(['slow:start', 'fail', 'slow:aborted'])
@@ -888,6 +893,607 @@ describe('either scoped signal', () => {
     )
   })
 
+  it('runs forkEach lazily with bounded concurrency and settlement-order completions', async () => {
+    const tasks = [
+      deferred<Either<'Failed', string>>(),
+      deferred<Either<'Failed', string>>(),
+      deferred<Either<'Failed', string>>(),
+    ]
+    const started: number[] = []
+    const completions: { index: number; value: string }[] = []
+
+    const resultPromise = either(async function* ({ signal }) {
+      const iterator = signal.forkEach(
+        ['zero', 'one', 'two'],
+        { concurrency: 2 },
+        async (_item, _child, index) => {
+          started.push(index)
+          return tasks[index]!.promise
+        },
+      )
+      const typed: ForkEachIterator<string, 'Failed', string> = iterator
+
+      expect(started).toEqual([])
+      for await (const completion of typed) {
+        const completionResult: Exit<'Failed', string> = completion.result
+        const value = yield* completionResult
+        completions.push({ index: completion.index, value })
+      }
+      return completions
+    })
+
+    await flushAsyncWork()
+    expect(started).toEqual([0, 1])
+
+    tasks[1]!.resolve(right('second'))
+    await flushAsyncWork()
+    expect(started).toEqual([0, 1, 2])
+    tasks[2]!.resolve(right('third'))
+    await flushAsyncWork()
+    tasks[0]!.resolve(right('first'))
+
+    expectRight(await resultPromise, [
+      { index: 1, value: 'second' },
+      { index: 2, value: 'third' },
+      { index: 0, value: 'first' },
+    ])
+  })
+
+  it('supports async sources and keeps active tasks plus queued completions bounded', async () => {
+    const releases = Array.from({ length: 4 }, () =>
+      deferred<Either<never, number>>(),
+    )
+    const bodyGate = deferred<void>()
+    let pulls = 0
+    let active = 0
+    let peak = 0
+
+    async function* source() {
+      for (let index = 0; index < releases.length; index++) {
+        pulls++
+        yield index
+      }
+    }
+
+    const resultPromise = either(async function* ({ signal }) {
+      const seen: number[] = []
+      for await (const completion of signal.forkEach(
+        source(),
+        { concurrency: 2 },
+        async (_item, _child, index) => {
+          active++
+          peak = Math.max(peak, active)
+          const result = await releases[index]!.promise
+          active--
+          return result
+        },
+      )) {
+        seen.push(yield* completion.result)
+        if (seen.length === 1) await bodyGate.promise
+      }
+      return seen
+    })
+
+    await flushAsyncWork()
+    expect(pulls).toBe(2)
+    releases[0]!.resolve(right(0))
+    await flushAsyncWork()
+    expect(pulls).toBe(3)
+    releases[1]!.resolve(right(1))
+    await flushAsyncWork()
+    expect(pulls).toBe(3)
+    expect(peak).toBe(2)
+
+    bodyGate.resolve()
+    await flushAsyncWork()
+    expect(pulls).toBe(4)
+    releases[2]!.resolve(right(2))
+    releases[3]!.resolve(right(3))
+
+    expectRight(await resultPromise, [0, 1, 2, 3])
+  })
+
+  it('completes an empty forkEach source without invoking the mapper', async () => {
+    let mapped = false
+
+    const result = await either(
+      // oxlint-disable-next-line require-yield
+      async function* ({ signal }) {
+        const completions: unknown[] = []
+        for await (const completion of signal.forkEach(
+          [] as number[],
+          { concurrency: 1 },
+          (item) => {
+            mapped = true
+            return right(item)
+          },
+        )) {
+          completions.push(completion)
+        }
+        return completions
+      },
+    )
+
+    expect(mapped).toBe(false)
+    expectRight(result, [])
+  })
+
+  it('emits domain failures, mapper throws, and mapper rejections as data', async () => {
+    const thrown = new Error('mapper threw')
+    const rejectedCause = new Error('mapper rejected')
+    const seen: Either<unknown, unknown>[] = []
+
+    const result = await either(
+      // oxlint-disable-next-line require-yield
+      async function* ({ signal }) {
+        for await (const { result } of signal.forkEach(
+          [0, 1, 2, 3],
+          { concurrency: 4 },
+          // oxlint-disable-next-line typescript/promise-function-async
+          (item) => {
+            if (item === 0) return left('DomainFailure' as const)
+            if (item === 1) throw thrown
+            if (item === 2) return Promise.reject(rejectedCause)
+            return right('ok' as const)
+          },
+        )) {
+          seen.push(result)
+        }
+        return 'continued' as const
+      },
+    )
+
+    expectRight(result, 'continued')
+    expect(seen).toHaveLength(4)
+    expectLeft(seen[0]!, 'DomainFailure')
+    expectLeft(seen[1]!, { _tag: 'Rejected', cause: thrown })
+    expectRight(seen[2]!, 'ok')
+    expectLeft(seen[3]!, { _tag: 'Rejected', cause: rejectedCause })
+  })
+
+  it('keeps nested cleanup failure Suppressed inside its forkEach completion', async () => {
+    const cleanupCause = new Error('nested cleanup')
+    let completionResult: Either<unknown, unknown> | undefined
+
+    const result = await either(
+      // oxlint-disable-next-line require-yield
+      async function* ({ signal }) {
+        for await (const { result } of signal.forkEach(
+          [1],
+          { concurrency: 1 },
+          async (_item, child) => {
+            void child.fork(async (grandchild) =>
+              rejectOnAbort(grandchild, cleanupCause),
+            )
+            return left('TaskFailed' as const)
+          },
+        )) {
+          completionResult = result
+        }
+        return 'continued' as const
+      },
+    )
+
+    expectRight(result, 'continued')
+    expect(completionResult).toBeDefined()
+    if (completionResult === undefined) return
+    expectLeft(completionResult, {
+      _tag: 'Suppressed',
+      error: 'TaskFailed',
+      suppressed: [{ _tag: 'Rejected', cause: cleanupCause }],
+    })
+  })
+
+  it('cancels and awaits forkEach children and closes the source on break', async () => {
+    const winner = deferred<Either<never, string>>()
+    const cleanup = deferred<void>()
+    const abortObserved = deferred<void>()
+    const reasons: unknown[] = []
+    let sourceReason: unknown
+    let sourceReturned = false
+    let settled = false
+    let index = 0
+    const source: AsyncIterable<number> = {
+      [Symbol.asyncIterator]() {
+        return {
+          async next() {
+            return { done: false, value: index++ }
+          },
+          async return(reason?: unknown) {
+            sourceReturned = true
+            sourceReason = reason
+            return { done: true, value: undefined }
+          },
+        }
+      },
+    }
+
+    const resultPromise = either(async function* ({ signal }) {
+      for await (const completion of signal.forkEach(
+        source,
+        { concurrency: 2 },
+        async (_item, child, taskIndex) => {
+          if (taskIndex === 0) return winner.promise
+          await new Promise<void>((resolve) => {
+            child.addEventListener(
+              'abort',
+              () => {
+                reasons.push(child.reason)
+                abortObserved.resolve()
+                resolve()
+              },
+              { once: true },
+            )
+          })
+          await cleanup.promise
+          return left('Stopped' as const)
+        },
+      )) {
+        yield* completion.result
+        break
+      }
+      return 'done' as const
+    })
+    void resultPromise.then(() => {
+      settled = true
+    })
+
+    await flushAsyncWork()
+    winner.resolve(right('winner'))
+    await abortObserved.promise
+    expect(settled).toBe(false)
+    expect(reasons).toEqual([forkEachStopped(), forkEachStopped()])
+    expect(sourceReturned).toBe(true)
+
+    cleanup.resolve()
+    expectRight(await resultPromise, 'done')
+    expect(sourceReturned).toBe(true)
+    expect(sourceReason).toBe(forkEachStopped())
+  })
+
+  it('lets yield* of a forkEach completion fail fast and stop pending work', async () => {
+    const stopped: unknown[] = []
+
+    const result = await either(
+      // oxlint-disable-next-line require-yield
+      async function* ({ signal }) {
+        for await (const { result } of signal.forkEach(
+          [0, 1],
+          { concurrency: 2 },
+          async (item, child) => {
+            if (item === 0) return left('BadItem' as const)
+            const value = await abortAsLeft(child, 'Stopped' as const)
+            stopped.push(child.reason)
+            return value
+          },
+        )) {
+          yield* result
+        }
+        return 'unreachable' as const
+      },
+    )
+
+    expectLeft(result, 'BadItem')
+    expect(stopped).toEqual([forkEachStopped()])
+  })
+
+  it('keeps every cleanup rejection beneath a fail-fast forkEach completion', async () => {
+    const primary = deferred<Either<'LiveDemoDetected', never>>()
+    const firstCleanup = new Error('rollback failed')
+    const secondCleanup = new Error('stream close failed')
+
+    const resultPromise = either(async function* ({ signal }) {
+      for await (const { result } of signal.forkEach(
+        [0, 1, 2],
+        { concurrency: 3 },
+        async (_item, child, index) => {
+          if (index === 0) return primary.promise
+          return await rejectOnAbort(
+            child,
+            index === 1 ? firstCleanup : secondCleanup,
+          )
+        },
+      )) {
+        yield* result
+      }
+      return 'unreachable' as const
+    })
+
+    await flushAsyncWork()
+    primary.resolve(left('LiveDemoDetected'))
+
+    expectLeft(await resultPromise, {
+      _tag: 'Suppressed',
+      error: 'LiveDemoDetected',
+      suppressed: [
+        { _tag: 'Rejected', cause: firstCleanup },
+        { _tag: 'Rejected', cause: secondCleanup },
+      ],
+    })
+  })
+
+  it('does not touch forkEach input in an already-aborted scope', async () => {
+    const controller = new AbortController()
+    controller.abort('AlreadyStopped')
+    let iterated = false
+    let mapped = false
+    const source: Iterable<number> = {
+      [Symbol.iterator]() {
+        iterated = true
+        return [1][Symbol.iterator]()
+      },
+    }
+
+    const result = await either(
+      controller.signal,
+      async function* ({ signal }) {
+        for await (const completion of signal.forkEach(
+          source,
+          { concurrency: 1 },
+          (item) => {
+            mapped = true
+            return right(item)
+          },
+        )) {
+          yield* completion.result
+        }
+        return 'done' as const
+      },
+    )
+
+    expect(iterated).toBe(false)
+    expect(mapped).toBe(false)
+    expectLeft(result, { _tag: 'Aborted', reason: 'AlreadyStopped' })
+  })
+
+  it('lets parent abort dominate forkEach and reach children and the source', async () => {
+    const controller = new AbortController()
+    const started = deferred<void>()
+    const reasons: unknown[] = []
+    let sourceReason: unknown
+    const source: AsyncIterable<number> = {
+      [Symbol.asyncIterator]() {
+        return {
+          async next() {
+            return { done: false, value: 1 }
+          },
+          async return(reason?: unknown) {
+            sourceReason = reason
+            return { done: true, value: undefined }
+          },
+        }
+      },
+    }
+
+    const resultPromise = either(
+      controller.signal,
+      async function* ({ signal }) {
+        for await (const completion of signal.forkEach(
+          source,
+          { concurrency: 1 },
+          async (_item, child) => {
+            started.resolve()
+            const stopped = await abortAsLeft(child, 'Stopped' as const)
+            reasons.push(child.reason)
+            return stopped
+          },
+        )) {
+          yield* completion.result
+        }
+        return 'unreachable' as const
+      },
+    )
+
+    await started.promise
+    controller.abort('ParentStopped')
+
+    expectLeft(await resultPromise, {
+      _tag: 'Aborted',
+      reason: 'ParentStopped',
+    })
+    expect(reasons).toEqual(['ParentStopped'])
+    expect(sourceReason).toBe('ParentStopped')
+  })
+
+  it('recursively cancels nested forks owned by forkEach tasks', async () => {
+    const nestedStarted = deferred<void>()
+    const nestedReasons: unknown[] = []
+
+    const resultPromise = either(async function* ({ signal }) {
+      for await (const completion of signal.forkEach(
+        [0, 1],
+        { concurrency: 2 },
+        async (item, child) => {
+          if (item === 0) return right('winner' as const)
+          return child.fork(async (grandchild) => {
+            nestedStarted.resolve()
+            const stopped = await abortAsLeft(
+              grandchild,
+              'NestedStopped' as const,
+            )
+            nestedReasons.push(grandchild.reason)
+            return stopped
+          })
+        },
+      )) {
+        yield* completion.result
+        break
+      }
+      return 'done' as const
+    })
+
+    await nestedStarted.promise
+    expectRight(await resultPromise, 'done')
+    expect(nestedReasons).toEqual([forkEachStopped()])
+  })
+
+  it('uses one teardown path for return and await using', async () => {
+    const reasons: unknown[] = []
+
+    const result = await either(
+      // oxlint-disable-next-line require-yield
+      async function* ({ signal }) {
+        await using iterator = signal.forkEach(
+          [0, 1],
+          { concurrency: 2 },
+          async (item, child) => {
+            if (item === 0) return right(item)
+            const stopped = await abortAsLeft(child, 'Stopped' as const)
+            reasons.push(child.reason)
+            return stopped
+          },
+        )
+
+        const first = await iterator.next()
+        expect(first.done).toBe(false)
+        await iterator.return?.()
+        return 'done' as const
+      },
+    )
+
+    expectRight(result, 'done')
+    expect(reasons).toEqual([forkEachStopped()])
+  })
+
+  it('turns source failures into Rejected and suppresses ordered teardown failures', async () => {
+    const firstCleanup = new Error('first cleanup')
+    const secondCleanup = new Error('second cleanup')
+    const sourceFailure = new Error('source pull')
+    let pull = 0
+    const source: AsyncIterable<number> = {
+      [Symbol.asyncIterator]() {
+        return {
+          async next() {
+            if (pull++ < 2) return { done: false, value: pull }
+            throw sourceFailure
+          },
+        }
+      },
+    }
+
+    const result = await either(async function* ({ signal }) {
+      for await (const completion of signal.forkEach(
+        source,
+        { concurrency: 3 },
+        async (_item, child, taskIndex) =>
+          rejectOnAbort(child, taskIndex === 0 ? firstCleanup : secondCleanup),
+      )) {
+        yield* completion.result
+      }
+      return 'unreachable' as const
+    })
+
+    expectLeft(result, {
+      _tag: 'Suppressed',
+      error: { _tag: 'Rejected', cause: sourceFailure },
+      suppressed: [
+        { _tag: 'Rejected', cause: firstCleanup },
+        { _tag: 'Rejected', cause: secondCleanup },
+      ],
+    })
+  })
+
+  it('orders task cleanup failures before a source-close failure', async () => {
+    const winner = deferred<Either<never, number>>()
+    const firstTaskCleanup = new Error('first task cleanup')
+    const secondTaskCleanup = new Error('second task cleanup')
+    const sourceCleanup = new Error('source cleanup')
+    let index = 0
+    const source: AsyncIterable<number> = {
+      [Symbol.asyncIterator]() {
+        return {
+          async next() {
+            return { done: false, value: index++ }
+          },
+          async return() {
+            throw sourceCleanup
+          },
+        }
+      },
+    }
+
+    const resultPromise = either(async function* ({ signal }) {
+      for await (const completion of signal.forkEach(
+        source,
+        { concurrency: 2 },
+        async (_item, child, taskIndex) =>
+          taskIndex === 0
+            ? winner.promise
+            : rejectOnAbort(
+                child,
+                taskIndex === 1 ? firstTaskCleanup : secondTaskCleanup,
+              ),
+      )) {
+        yield* completion.result
+        break
+      }
+      return 'unreachable' as const
+    })
+
+    await flushAsyncWork()
+    winner.resolve(right(0))
+
+    expectLeft(await resultPromise, {
+      _tag: 'Suppressed',
+      error: { _tag: 'Rejected', cause: firstTaskCleanup },
+      suppressed: [
+        { _tag: 'Rejected', cause: secondTaskCleanup },
+        { _tag: 'Rejected', cause: sourceCleanup },
+      ],
+    })
+  })
+
+  it('lets one reject-on-stop cleanup failure override a successful break', async () => {
+    const winner = deferred<Either<never, number>>()
+    const cleanupCause = new Error('cleanup failed')
+
+    const resultPromise = either(async function* ({ signal }) {
+      for await (const completion of signal.forkEach(
+        [0, 1],
+        { concurrency: 1 },
+        async (_item, child, index) =>
+          index === 0 ? winner.promise : rejectOnAbort(child, cleanupCause),
+      )) {
+        yield* completion.result
+        break
+      }
+      return 'unreachable' as const
+    })
+
+    await flushAsyncWork()
+    winner.resolve(right(0))
+
+    expectLeft(await resultPromise, { _tag: 'Rejected', cause: cleanupCause })
+  })
+
+  it('validates forkEach concurrency before touching the source', async () => {
+    const values = [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]
+    let touched = false
+    const source: Iterable<number> = {
+      [Symbol.iterator]() {
+        touched = true
+        return [1][Symbol.iterator]()
+      },
+    }
+
+    const result = await either(
+      // oxlint-disable-next-line require-yield
+      async function* ({ signal }) {
+        for (const concurrency of values) {
+          expect(() =>
+            signal.forkEach(source, { concurrency }, (item) => right(item)),
+          ).toThrow(
+            'signal.forkEach() concurrency must be a positive safe integer',
+          )
+        }
+        return 'done' as const
+      },
+    )
+
+    expectRight(result, 'done')
+    expect(touched).toBe(false)
+  })
+
   it('recursively aborts forks created inside forked tasks', async () => {
     const events: string[] = []
 
@@ -1085,6 +1691,13 @@ describe('either scoped signal', () => {
         return yield* right(1)
       }),
     ).toThrow('signal.forkRace() is only available in async either')
+
+    expect(() =>
+      either(function* ({ signal }) {
+        void signal.forkEach([], { concurrency: 1 }, (item) => right(item))
+        return yield* right(1)
+      }),
+    ).toThrow('signal.forkEach() is only available in async either')
   })
 })
 
@@ -1657,34 +2270,106 @@ describe('collectAll', () => {
   })
 })
 
-describe('capture', () => {
-  it('captures a Left as a value instead of short-circuiting', () => {
-    const result = either(function* () {
-      const cached = yield* capture(left('CacheMiss' as const))
-      if (cached._tag === 'Left') return 'fallback' as const
-      return cached.value
-    })
+describe('raise.capture', () => {
+  it('preserves an existing Either by identity through raise.capture', () => {
+    const cached = left('CacheMiss' as const)
+
+    const result = either(
+      // oxlint-disable-next-line require-yield
+      function* (raise) {
+        const attempt = raise.capture(cached)
+        expect(attempt).toBe(cached)
+        return attempt._tag === 'Left' ? 'fallback' : attempt.value
+      },
+    )
 
     expectRight(result, 'fallback')
   })
 
-  it('allows a captured Left to be re-raised explicitly', () => {
-    const result = either(function* (raise) {
-      const cached = yield* capture(left('CacheMiss' as const))
-      if (cached._tag === 'Left') return raise(cached.error)
-      return cached.value
-    })
+  it('captures raw and throwing synchronous work without short-circuiting', () => {
+    const cause = new Error('Cache unavailable')
 
-    expectLeft(result, 'CacheMiss')
+    const result = either(
+      // oxlint-disable-next-line require-yield
+      function* ({ raise }) {
+        const hit = raise.capture(() => 42 as const)
+        const miss = raise.capture(() => {
+          throw cause
+        })
+        const typedHit: Either<Rejected, 42> = hit
+        const typedMiss: Either<Rejected, never> = miss
+
+        expectRight(typedHit, 42)
+        expect(miss._tag).toBe('Left')
+        expectLeft(typedMiss, { _tag: 'Rejected', cause })
+        return 'continued' as const
+      },
+    )
+
+    expectRight(result, 'continued')
   })
 
-  it('captures a Right without changing its value', () => {
-    const result = either(function* () {
-      const value = yield* capture(right(42))
-      return value._tag === 'Right' ? value.value : 0
+  it('flattens an Either returned by a synchronous thunk', () => {
+    const result = raise.capture(() => left('Unavailable' as const))
+    const typed: Either<'Unavailable' | Rejected, never> = result
+
+    expect(typed).toBe(result)
+    expectLeft(result, 'Unavailable')
+  })
+
+  it('flattens resolved Eithers and wraps raw async successes', async () => {
+    const domain = await raise.capture(
+      Promise.resolve(right({ id: 'user-1' as const })),
+    )
+    const raw = await raise.capture(async () => 'ready' as const)
+    const typedDomain: Either<Rejected, { id: 'user-1' }> = domain
+    const typedRaw: Either<Rejected, 'ready'> = raw
+
+    expect(typedDomain).toBe(domain)
+    expectRight(domain, { id: 'user-1' })
+    expectRight(typedRaw, 'ready')
+  })
+
+  it('captures rejected promises without short-circuiting', async () => {
+    const cause = new Error('Provider rejected')
+
+    const result = await either(
+      // oxlint-disable-next-line require-yield
+      async function* ({ raise }) {
+        const attempt = await raise.capture(Promise.reject(cause))
+        const typed: Either<Rejected, never> = attempt
+
+        expect(attempt._tag).toBe('Left')
+        expectLeft(typed, { _tag: 'Rejected', cause })
+        return 'fallback' as const
+      },
+    )
+
+    expectRight(result, 'fallback')
+  })
+
+  it('captures custom thenables and flattens their outcomes', async () => {
+    const outcome = right('from-thenable' as const)
+    const thenable = {
+      // oxlint-disable-next-line unicorn/no-thenable
+      then(resolve: (value: typeof outcome) => void) {
+        resolve(outcome)
+      },
+    } as PromiseLike<typeof outcome>
+
+    const result = await raise.capture(thenable)
+    expect(result).toBe(outcome)
+  })
+
+  it('allows a captured outcome to be propagated deliberately', async () => {
+    const result = await either(async function* (raise) {
+      const attempt = await raise.capture(async () =>
+        left('ProviderDown' as const),
+      )
+      return yield* attempt
     })
 
-    expectRight(result, 42)
+    expectLeft(result, 'ProviderDown')
   })
 })
 

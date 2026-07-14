@@ -3,7 +3,7 @@ import {
   type InferA,
   type InferE,
   Left,
-  type Right,
+  Right,
   left,
   right,
 } from './either.ts'
@@ -67,6 +67,19 @@ const SIBLING_SETTLED: SiblingSettled = { _tag: 'SiblingSettled' }
  * Returns the singleton {@link SiblingSettled} cancellation reason.
  */
 export const siblingSettled = (): SiblingSettled => SIBLING_SETTLED
+
+/**
+ * The cancellation reason used when a `forkEach` consumer stops iterating
+ * before every input has completed.
+ */
+export type ForkEachStopped = {
+  readonly _tag: 'ForkEachStopped'
+}
+
+const FORK_EACH_STOPPED: ForkEachStopped = { _tag: 'ForkEachStopped' }
+
+/** Returns the singleton {@link ForkEachStopped} cancellation reason. */
+export const forkEachStopped = (): ForkEachStopped => FORK_EACH_STOPPED
 
 /**
  * Represents an `AbortSignal` cancellation captured as a typed `Left` value.
@@ -133,22 +146,20 @@ export type Exit<
  *
  * @param fn - A function whose thrown or rejected cause should be captured.
  */
-export function raise<T>(
+function raiseImpl<T>(
   fn: () => T | PromiseLike<T>,
 ): Promise<Either<Rejected, Awaited<T>>>
 
 /**
  * @param p - A promise-like value whose rejection should be captured.
  */
-export function raise<T>(p: PromiseLike<T>): Promise<Either<Rejected, T>>
+function raiseImpl<T>(p: PromiseLike<T>): Promise<Either<Rejected, T>>
 
 /**
  * @param e - An error value to wrap as `Left<E>`.
  */
-export function raise<const E>(e: E): Left<E>
-export function raise(
-  x: unknown,
-): Promise<Either<Rejected, unknown>> | Left<any> {
+function raiseImpl<const E>(e: E): Left<E>
+function raiseImpl(x: unknown): Promise<Either<Rejected, unknown>> | Left<any> {
   if (typeof x === 'function') {
     return Promise.try(x as () => unknown).then(right, toRejectedLeft)
   }
@@ -169,6 +180,70 @@ export function raise(
   return left(x)
 }
 
+/**
+ * The outcome produced by {@link Capture} for work that can throw or reject.
+ * Existing `Either` failures are flattened alongside `Rejected`; raw success
+ * values are wrapped in `Right`.
+ */
+export type Captured<T> = [T] extends [never]
+  ? Either<Rejected, never>
+  : T extends Either<any, any>
+    ? Either<InferE<T> | Rejected, InferA<T>>
+    : Either<Rejected, T>
+
+/**
+ * Captures work as an `Either` without short-circuiting the enclosing flow.
+ *
+ * Passing an existing `Either` is an allocation-free identity operation.
+ * Thunks and promise-like values flatten an eventual `Either`, wrap raw
+ * successes in `Right`, and turn synchronous throws or rejections into
+ * `Left<Rejected>`.
+ */
+export type Capture = {
+  <E, A>(value: Either<E, A>): Either<E, A>
+  <T>(
+    work: () => T,
+  ): [T] extends [never]
+    ? Captured<never>
+    : T extends PromiseLike<infer A>
+      ? Promise<Captured<Awaited<A>>>
+      : Captured<T>
+  <T>(promise: PromiseLike<T>): Promise<Captured<Awaited<T>>>
+  <const A>(value: A): Right<A>
+}
+
+// oxlint-disable-next-line typescript/promise-function-async
+const capture: Capture = ((input: unknown) => {
+  let value: unknown
+  try {
+    value = typeof input === 'function' ? (input as () => unknown)() : input
+    if (value instanceof Left || value instanceof Right) return value
+
+    if (
+      value !== null &&
+      (typeof value === 'object' || typeof value === 'function') &&
+      typeof (value as { readonly then?: unknown }).then === 'function'
+    ) {
+      return Promise.try(() => value).then(finishCaptured, toRejectedLeft)
+    }
+
+    return right(value)
+  } catch (cause) {
+    return toRejectedLeft(cause)
+  }
+}) as Capture
+
+function finishCaptured(value: unknown): Either<unknown, unknown> {
+  return value instanceof Left || value instanceof Right ? value : right(value)
+}
+
+/**
+ * Polymorphic error injection with a local outcome boundary at
+ * `raise.capture(...)`.
+ */
+export const raise: typeof raiseImpl & { readonly capture: Capture } =
+  Object.assign(raiseImpl, { capture: capture })
+
 export type Raise = typeof raise
 
 /**
@@ -180,6 +255,34 @@ export type Raise = typeof raise
 export type ScopeTask<E, A> = (
   signal: ScopeSignal,
 ) => Either<E, A> | PromiseLike<Either<E, A>>
+
+/** Options for {@link ScopeSignal.forkEach}. */
+export type ForkEachOptions = {
+  readonly concurrency: number
+}
+
+/** A task mapped over an input by {@link ScopeSignal.forkEach}. */
+export type ForkEachTask<Input, E, A> = (
+  item: Input,
+  signal: ScopeSignal,
+  index: number,
+) => Either<E, A> | PromiseLike<Either<E, A>>
+
+/** A task outcome emitted by {@link ScopeSignal.forkEach}. */
+export type ForkEachCompletion<Input, E, A> = {
+  readonly item: Input
+  readonly index: number
+  readonly result: Exit<E, A>
+}
+
+/**
+ * The single-use completion iterator returned by
+ * {@link ScopeSignal.forkEach}.
+ */
+export type ForkEachIterator<Input, E, A> = AsyncIterableIterator<
+  ForkEachCompletion<Input, E, A>
+> &
+  AsyncDisposable
 
 type AwaitedScopeTask<T> = T extends (signal: ScopeSignal) => infer R
   ? Awaited<R>
@@ -221,6 +324,11 @@ export type ScopeSignal = AbortSignal & {
   forkRace<const T extends readonly ScopeTask<any, any>[]>(
     tasks: T,
   ): Promise<Exit<ScopeTaskError<T[number]>, ScopeTaskValue<T[number]>>>
+  forkEach<Input, E, A>(
+    items: Iterable<Input> | AsyncIterable<Input>,
+    options: ForkEachOptions,
+    task: ForkEachTask<Input, E, A>,
+  ): ForkEachIterator<Input, E, A>
 }
 
 /**
@@ -230,7 +338,7 @@ export type ScopeSignal = AbortSignal & {
  * lazily exposes a scoped signal in async flows.
  */
 export type RaiseContext = Raise & {
-  readonly raise: Raise
+  readonly raise: RaiseContext
   readonly signal: ScopeSignal
 }
 
