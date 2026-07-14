@@ -661,7 +661,7 @@ function pick<const T extends readonly unknown[]>(
   random: () => number,
   values: T,
 ): T[number] {
-  return values[randomInt(random, values.length)] as T[number]
+  return values[randomInt(random, values.length)]
 }
 
 function shuffled<T>(random: () => number, values: T[]): T[] {

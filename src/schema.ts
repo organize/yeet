@@ -249,7 +249,7 @@ export function exitSchema<
   const error = exitErrorSchema(options)
   return eitherSchema(
     options.value === undefined ? { error } : { error, value: options.value },
-  ) as ExitSchema<E, A, Reason, Cause>
+  )
 }
 
 function validateSerialized<E, A>(
@@ -376,9 +376,7 @@ function validateExitError<E, Reason, Cause>(
 
   if (options.error === undefined) return failure('Expected Exit error')
 
-  return options.error['~standard'].validate(value) as
-    | StandardSchemaResult<ExitError<E, Reason, Cause>>
-    | Promise<StandardSchemaResult<ExitError<E, Reason, Cause>>>
+  return options.error['~standard'].validate(value)
 }
 
 function validateRejected<Cause>(

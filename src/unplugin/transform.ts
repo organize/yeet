@@ -120,7 +120,7 @@ export function transformYeet(
   if (state.optimized === 0) return null
 
   const output = generate(
-    ast,
+    ast.program,
     {
       sourceMaps: true,
       sourceFileName: id,
