@@ -284,6 +284,23 @@ describe('chunks', () => {
     expect(canceled).toBe(true)
     expect(cancelReason).toBe('stop')
   })
+
+  it('forwards an explicit return reason to a chunk source', async () => {
+    const reason = { _tag: 'ConsumerStopped' as const }
+    const { stream, state } = trackedByteStream(
+      Array.from({ length: 20 }, (_, index) => String(index)),
+    )
+    const iterator = chunks(stream) as AsyncIterator<
+      Either<unknown, unknown>,
+      unknown,
+      unknown
+    >
+
+    await iterator.next()
+    await iterator.return?.(reason)
+
+    expect(state.cancelReason).toBe(reason)
+  })
 })
 
 describe('consume', () => {
@@ -568,6 +585,56 @@ describe('lines and structured streams', () => {
     expect(state.cancelled).toBe(true)
   })
 
+  it('forwards an explicit ndjson return reason to the byte source', async () => {
+    const reason = { _tag: 'ForkEachStopped' as const }
+    const { stream, state } = trackedByteStream(
+      Array.from({ length: 20 }, (_, index) => `{"seq":${index}}\n`),
+    )
+    const iterator = ndjson(stream) as AsyncIterator<
+      Either<unknown, unknown>,
+      unknown,
+      unknown
+    >
+
+    const first = await iterator.next()
+    expect(first.done).toBe(false)
+    await iterator.return?.(reason)
+
+    expect(state.cancelled).toBe(true)
+    expect(state.cancelReason).toBe(reason)
+  })
+
+  it('does not echo an existing stream error as a teardown rejection', async () => {
+    const reason = { _tag: 'ForkEachStopped' as const }
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.error(reason)
+      },
+    })
+    const iterator = sse(stream) as AsyncIterator<
+      Either<unknown, unknown>,
+      unknown,
+      unknown
+    >
+
+    const first = await iterator.next()
+    expect(first.done).toBe(false)
+    if (first.done === false) {
+      expect(first.value._tag).toBe('Left')
+      if (first.value._tag === 'Left') {
+        expect(first.value.error).toEqual({
+          _tag: 'StreamReadError',
+          cause: reason,
+        })
+      }
+    }
+
+    await expect(iterator.return?.(reason)).resolves.toEqual({
+      done: true,
+      value: reason,
+    })
+  })
+
   it('cancels the source with a fatal line-size reason', async () => {
     const { stream, state } = trackedByteStream([
       '{"seq":0}\n',
@@ -665,6 +732,44 @@ describe('lines and structured streams', () => {
 })
 
 describe('yeet-style stream flows', () => {
+  it('does not suppress an echoed stream cancellation beneath forkEach failure', async () => {
+    const primary = Promise.withResolvers<Either<'LiveDemoDetected', never>>()
+    const streamStarted = Promise.withResolvers<void>()
+
+    const resultPromise = either(async function* ({ signal }) {
+      for await (const { result } of signal.forkEach<
+        number,
+        unknown,
+        'unreachable'
+      >([0, 1], { concurrency: 2 }, async (item, child) => {
+        if (item === 0) return await primary.promise
+
+        const stream = new ReadableStream<Uint8Array>({
+          pull(controller) {
+            streamStarted.resolve()
+            const stop = () => controller.error(child.reason)
+            if (child.aborted) stop()
+            else child.addEventListener('abort', stop, { once: true })
+          },
+        })
+        for await (const event of sse(stream)) {
+          if (event._tag === 'Left') return event
+        }
+        return right('unreachable' as const)
+      })) {
+        yield* result
+      }
+      return 'unreachable' as const
+    })
+
+    await streamStarted.promise
+    primary.resolve(left('LiveDemoDetected'))
+
+    const result = await resultPromise
+    expect(result._tag).toBe('Left')
+    if (result._tag === 'Left') expect(result.error).toBe('LiveDemoDetected')
+  })
+
   it('uses bytes inside an async either flow', async () => {
     const result = await either(async function* () {
       const body = yield* await text(byteChunks(['doc', ' body']), {

@@ -118,6 +118,7 @@ type StopState = {
   readonly cleanup: () => void
 }
 type CloseMode = 'cancel' | 'release'
+type ReturnReason = { value: unknown }
 type ReleasableAsyncIterator<T> = AsyncIterator<T> & {
   return(reason?: unknown): Promise<IteratorReturnResult<undefined>>
   release(): void
@@ -217,9 +218,19 @@ export async function json(
   return parseJson(body.value)
 }
 
-export async function* chunks(
+export function chunks(
   source: ByteSource,
   options: ByteOptions = {},
+): AsyncGenerator<Either<Aborted | StreamError, Uint8Array>, void, unknown> {
+  return withReturnReason((returnReason) =>
+    chunksGenerator(source, options, returnReason),
+  )
+}
+
+async function* chunksGenerator(
+  source: ByteSource,
+  options: ByteOptions,
+  returnReason: ReturnReason,
 ): AsyncGenerator<Either<Aborted | StreamError, Uint8Array>, void, unknown> {
   const stop = createStopState(options)
   if (stop.initial !== undefined) {
@@ -299,7 +310,10 @@ export async function* chunks(
     yield left(error)
   } finally {
     stop.cleanup()
-    if (close === 'release' && !completed) close = 'cancel'
+    if (close === 'release' && !completed) {
+      close = 'cancel'
+      closeReason = returnReason.value
+    }
     await closeIterator(iterator.value, close, closeReason)
   }
 }
@@ -560,12 +574,25 @@ export function sse(
   )
 }
 
-async function* mapLines<A>(
+function mapLines<A>(
   source: ByteSource,
   options: LineOptions,
   map: (line: string) => Either<StreamError, A> | undefined,
   finish?: () => Either<StreamError, A> | undefined,
   behavior: { readonly continueOnMappedLeft?: boolean } = {},
+): AsyncGenerator<Either<Aborted | StreamError, A>, void, unknown> {
+  return withReturnReason((returnReason) =>
+    mapLinesGenerator(source, options, map, finish, behavior, returnReason),
+  )
+}
+
+async function* mapLinesGenerator<A>(
+  source: ByteSource,
+  options: LineOptions,
+  map: (line: string) => Either<StreamError, A> | undefined,
+  finish: (() => Either<StreamError, A> | undefined) | undefined,
+  behavior: { readonly continueOnMappedLeft?: boolean },
+  returnReason: ReturnReason,
 ): AsyncGenerator<Either<Aborted | StreamError, A>, void, unknown> {
   const stop = createStopState(options)
   if (stop.initial !== undefined) {
@@ -741,7 +768,7 @@ async function* mapLines<A>(
     stop.cleanup()
     if (close === 'release' && !completed) {
       close = 'cancel'
-      closeReason = yieldedError
+      closeReason = yieldedError ?? returnReason.value
     }
     await closeIterator(iterator.value, close, closeReason)
   }
@@ -869,12 +896,41 @@ function readableIterator<T>(
   return {
     next: async () => reader.read(),
     return: async (reason?: unknown) => {
-      await reader.cancel(reason)
-      reader.releaseLock()
+      try {
+        await reader.cancel(reason)
+      } catch (cause) {
+        let streamError: unknown
+        try {
+          await reader.closed
+        } catch (closedCause) {
+          streamError = closedCause
+        }
+
+        // An errored stream makes cancel() reject with its stored error. That
+        // is the original failure reaching teardown, not a second failure.
+        if (cause !== streamError) throw cause
+      } finally {
+        reader.releaseLock()
+      }
       return { value: undefined, done: true }
     },
     release: () => reader.releaseLock(),
   }
+}
+
+function withReturnReason<Yield, Return, Next>(
+  create: (returnReason: ReturnReason) => AsyncGenerator<Yield, Return, Next>,
+): AsyncGenerator<Yield, Return, Next> {
+  const returnReason: ReturnReason = { value: undefined }
+  const generator = create(returnReason)
+  const originalReturn = generator.return.bind(generator)
+
+  generator.return = async (value) => {
+    returnReason.value = value
+    return await originalReturn(value)
+  }
+
+  return generator
 }
 
 async function* singleChunkIterator(

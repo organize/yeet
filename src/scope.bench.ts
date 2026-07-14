@@ -1,6 +1,6 @@
 import { bench, describe } from 'vitest'
 
-import { rejected, siblingSettled } from './async.ts'
+import { forkEachStopped, rejected, siblingSettled } from './async.ts'
 import { BENCH_OPTS } from './bench-options.ts'
 import { either } from './combinators.ts'
 import { type Either, left, right } from './either.ts'
@@ -10,6 +10,7 @@ type Candidate = (
 ) => Either<unknown, unknown> | PromiseLike<Either<unknown, unknown>>
 
 const BENCH_BATCH = readPositiveInt('SCOPE_BENCH_BATCH', 16)
+const FORK_EACH_BENCH_BATCH = readPositiveInt('FORK_EACH_BENCH_BATCH', 8)
 const sink = { value: undefined as unknown }
 
 const immediateSuccess = [
@@ -52,6 +53,79 @@ describe('scoped first success: cancel losers', () => {
   benchmarkPair(cancelLosers)
 })
 
+type EachMapper = (
+  item: number,
+  signal: AbortSignal,
+  index: number,
+) => Either<unknown, number> | PromiseLike<Either<unknown, number>>
+
+type EachScenario = {
+  readonly source: () => Iterable<number> | AsyncIterable<number>
+  readonly concurrency: number
+  readonly task: EachMapper
+  readonly limit?: number
+}
+
+const immediateEach: EachScenario = {
+  source: () => [0, 1, 2, 3, 4, 5, 6, 7],
+  concurrency: 4,
+  task: (item) => right(item),
+}
+
+const mixedEach: EachScenario = {
+  source: () => [0, 1, 2, 3, 4, 5, 6, 7],
+  concurrency: 4,
+  task: (item) => (item % 3 === 0 ? left(item) : right(item)),
+}
+
+const outOfOrderEach: EachScenario = {
+  source: () => [0, 1, 2, 3, 4, 5, 6, 7],
+  concurrency: 4,
+  task: async (item) => {
+    for (let turn = 0; turn < (7 - item) % 4; turn++) await Promise.resolve()
+    return right(item)
+  },
+}
+
+const asyncSourceEach: EachScenario = {
+  source: async function* () {
+    for (let item = 0; item < 8; item++) {
+      await Promise.resolve()
+      yield item
+    }
+  },
+  concurrency: 4,
+  task: (item) => right(item),
+}
+
+const earlyBreakEach: EachScenario = {
+  source: () => [0, 1, 2, 3, 4, 5, 6, 7],
+  concurrency: 4,
+  // oxlint-disable-next-line typescript/promise-function-async
+  task: (item, signal) => (item === 0 ? right(item) : waitForEachAbort(signal)),
+  limit: 1,
+}
+
+describe('scoped completion stream: immediate success', () => {
+  benchmarkEachPair(immediateEach)
+})
+
+describe('scoped completion stream: mixed failures', () => {
+  benchmarkEachPair(mixedEach)
+})
+
+describe('scoped completion stream: out-of-order async completion', () => {
+  benchmarkEachPair(outOfOrderEach)
+})
+
+describe('scoped completion stream: async source backpressure', () => {
+  benchmarkEachPair(asyncSourceEach)
+})
+
+describe('scoped completion stream: early-break cancellation', () => {
+  benchmarkEachPair(earlyBreakEach)
+})
+
 function benchmarkPair(tasks: readonly Candidate[]): void {
   bench(
     'manual cancellation-aware first Right',
@@ -70,6 +144,24 @@ function benchmarkPair(tasks: readonly Candidate[]): void {
   )
 }
 
+function benchmarkEachPair(scenario: EachScenario): void {
+  bench(
+    'manual bounded completion pool',
+    async () => {
+      await consumeEachBatch(manualEach, scenario)
+    },
+    BENCH_OPTS,
+  )
+
+  bench(
+    'yeet signal.forkEach',
+    async () => {
+      await consumeEachBatch(yeetEach, scenario)
+    },
+    BENCH_OPTS,
+  )
+}
+
 async function consumeBatch(
   run: (tasks: readonly Candidate[]) => Promise<Either<unknown, unknown>>,
   tasks: readonly Candidate[],
@@ -81,12 +173,132 @@ async function consumeBatch(
   sink.value = value
 }
 
+async function consumeEachBatch(
+  run: (scenario: EachScenario) => Promise<Either<unknown, unknown>>,
+  scenario: EachScenario,
+): Promise<void> {
+  let value: unknown
+  for (let batch = 0; batch < FORK_EACH_BENCH_BATCH; batch++) {
+    value = await run(scenario)
+  }
+  sink.value = value
+}
+
 async function yeetFirst(
   tasks: readonly Candidate[],
 ): Promise<Either<unknown, unknown>> {
   return await either(async function* ({ signal }) {
     return yield* await signal.forkFirst(tasks)
   })
+}
+
+async function yeetEach(
+  scenario: EachScenario,
+): Promise<Either<unknown, unknown>> {
+  return await either(
+    // oxlint-disable-next-line require-yield
+    async function* ({ signal }) {
+      const completions: unknown[] = []
+      for await (const completion of signal.forkEach(
+        scenario.source(),
+        { concurrency: scenario.concurrency },
+        scenario.task,
+      )) {
+        completions.push(completion)
+        if (
+          scenario.limit !== undefined &&
+          completions.length === scenario.limit
+        )
+          break
+      }
+      return completions
+    },
+  )
+}
+
+async function manualEach(
+  scenario: EachScenario,
+): Promise<Either<unknown, unknown>> {
+  const completions: unknown[] = []
+  for await (const completion of manualEachIterator(scenario)) {
+    completions.push(completion)
+    if (scenario.limit !== undefined && completions.length === scenario.limit)
+      break
+  }
+  return right(completions)
+}
+
+async function* manualEachIterator(
+  scenario: EachScenario,
+): AsyncGenerator<unknown> {
+  const input = scenario.source()
+  const asyncIterator = (input as AsyncIterable<number>)[Symbol.asyncIterator]
+  const source =
+    typeof asyncIterator === 'function'
+      ? asyncIterator.call(input)
+      : (input as Iterable<number>)[Symbol.iterator]()
+  const active = new Map<
+    number,
+    {
+      readonly controller: AbortController
+      readonly promise: Promise<{
+        readonly item: number
+        readonly index: number
+        readonly result: Either<unknown, number>
+      }>
+    }
+  >()
+  let index = 0
+  let sourceDone = false
+
+  const refill = async (): Promise<void> => {
+    while (!sourceDone && active.size < scenario.concurrency) {
+      const next = await source.next()
+      if (next.done) {
+        sourceDone = true
+        return
+      }
+
+      const taskIndex = index++
+      const controller = new AbortController()
+      const promise = Promise.try(() =>
+        scenario.task(next.value, controller.signal, taskIndex),
+      ).then(
+        (result) => ({ item: next.value, index: taskIndex, result }),
+        (cause) => ({
+          item: next.value,
+          index: taskIndex,
+          result: left(rejected(cause)),
+        }),
+      )
+      active.set(taskIndex, { controller, promise })
+    }
+  }
+
+  try {
+    await refill()
+    while (active.size > 0) {
+      const completion = await Promise.race(
+        [...active.values()].map(
+          // oxlint-disable-next-line typescript/promise-function-async
+          ({ promise }) => promise,
+        ),
+      )
+      active.delete(completion.index)
+      yield completion
+      await refill()
+    }
+  } finally {
+    const reason = forkEachStopped()
+    for (const { controller } of active.values()) controller.abort(reason)
+    await Promise.allSettled(
+      [...active.values()].map(
+        // oxlint-disable-next-line typescript/promise-function-async
+        ({ promise }) => promise,
+      ),
+    )
+    if (!sourceDone) await source.return?.(reason)
+  }
 }
 
 // oxlint-disable-next-line typescript/promise-function-async
@@ -147,6 +359,19 @@ function manualFirst(
 
 // oxlint-disable-next-line typescript/promise-function-async
 function waitForAbort(
+  signal: AbortSignal,
+): Promise<Either<'Cancelled', never>> {
+  if (signal.aborted) return Promise.resolve(left('Cancelled'))
+
+  return new Promise((resolve) => {
+    signal.addEventListener('abort', () => resolve(left('Cancelled')), {
+      once: true,
+    })
+  })
+}
+
+// oxlint-disable-next-line typescript/promise-function-async
+function waitForEachAbort(
   signal: AbortSignal,
 ): Promise<Either<'Cancelled', never>> {
   if (signal.aborted) return Promise.resolve(left('Cancelled'))

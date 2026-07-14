@@ -16,12 +16,7 @@ export type YeetTransformResult = {
 }
 
 type CombinatorName = 'either' | 'validate' | 'firstOf' | 'collect'
-type EitherIntrinsicName =
-  | 'capture'
-  | 'ensure'
-  | 'ensureNotNull'
-  | 'left'
-  | 'right'
+type EitherIntrinsicName = 'ensure' | 'ensureNotNull' | 'left' | 'right'
 type HelperKey = 'raise' | 'left' | 'right'
 type StreamItemHelperName = 'chunks' | 'lines' | 'ndjson' | 'sse'
 
@@ -65,7 +60,6 @@ const COMBINATOR_NAMES = new Set<CombinatorName>([
   'collect',
 ])
 const EITHER_INTRINSIC_NAMES = new Set<EitherIntrinsicName>([
-  'capture',
   'ensure',
   'ensureNotNull',
   'left',
@@ -902,6 +896,17 @@ function skipTransparentParents(path: NodePath<any>): NodePath<any> {
 }
 
 function isAllowedRaiseReference(path: NodePath<t.Identifier>): boolean {
+  const member = path.parentPath
+  if (
+    member.isMemberExpression() &&
+    member.get('object') === path &&
+    !member.node.computed &&
+    t.isIdentifier(member.node.property, { name: 'capture' })
+  ) {
+    const call = member.parentPath
+    return call.isCallExpression({ callee: member.node })
+  }
+
   const call = path.parentPath
   if (!call.isCallExpression({ callee: path.node })) return false
 
@@ -1072,7 +1077,7 @@ function buildEitherYieldRewrite(
     }
   }
 
-  if (intrinsic.name === 'right' || intrinsic.name === 'capture') {
+  if (intrinsic.name === 'right') {
     const value = path.scope.generateUidIdentifier('yeetValue')
     return {
       path,

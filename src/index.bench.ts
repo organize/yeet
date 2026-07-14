@@ -54,7 +54,6 @@ const BENCH_SOURCE = `
     validate,
     firstOf,
     collect,
-    capture,
     ensure,
     ensureNotNull,
     left,
@@ -187,16 +186,16 @@ const BENCH_SOURCE = `
   }
 
   export function eitherFusedCaptureRight(index) {
-    return either(function* () {
-      const cached = yield* capture(CACHE_HITS[bit(index)])
+    return either(function* ({ raise }) {
+      const cached = raise.capture(CACHE_HITS[bit(index)])
       if (cached._tag === "Right") return cached.value
       return yield* getUser(HIT_IDS[bit(index)])
     })
   }
 
   export function eitherFusedCaptureLeft(index) {
-    return either(function* () {
-      const cached = yield* capture(CACHE_MISSES[bit(index)])
+    return either(function* ({ raise }) {
+      const cached = raise.capture(CACHE_MISSES[bit(index)])
       if (cached._tag === "Right") return cached.value
       const user = yield* getUser(HIT_IDS[bit(index)])
       return user.name
@@ -421,12 +420,12 @@ benchPair(
 benchPair('either (fused intrinsics)', 'guards, Left', 'eitherFusedGuardsLeft')
 benchPair(
   'either (fused intrinsics)',
-  'capture, Right',
+  'raise.capture, Right',
   'eitherFusedCaptureRight',
 )
 benchPair(
   'either (fused intrinsics)',
-  'capture, Left then fallback',
+  'raise.capture, Left then fallback',
   'eitherFusedCaptureLeft',
 )
 
