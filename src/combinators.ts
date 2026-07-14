@@ -168,6 +168,12 @@ function createScopeRuntime(parent?: AbortSignal): ScopeRuntime {
       value: <const T extends readonly ScopeTask<any, any>[]>(tasks: T) =>
         forkAllScopedTasks(scope, tasks),
     },
+    forkFirst: {
+      configurable: true,
+      // oxlint-disable-next-line typescript/promise-function-async
+      value: <const T extends readonly ScopeTask<any, any>[]>(tasks: T) =>
+        forkFirstScopedTasks(scope, tasks),
+    },
     forkRace: {
       configurable: true,
       // oxlint-disable-next-line typescript/promise-function-async
@@ -286,6 +292,73 @@ function createScopeRuntime(parent?: AbortSignal): ScopeRuntime {
   }
 
   // oxlint-disable-next-line typescript/promise-function-async
+  function forkFirstScopedTasks<const T extends readonly ScopeTask<any, any>[]>(
+    owner: ScopeRuntime,
+    tasks: T,
+  ): Promise<Exit<any[], any>> {
+    ensureForkEnabled('forkFirst')
+
+    const existing = failure
+    if (existing !== undefined) return Promise.resolve(existing)
+    if (tasks.length === 0) {
+      const result = left([])
+      owner.fail(result)
+      return Promise.resolve(result)
+    }
+
+    const handles: (ScopedTaskHandle<any, any> | undefined)[] = []
+    handles.length = tasks.length
+    let errors: any[] | undefined
+
+    let remaining = tasks.length
+    let settled = false
+
+    return new Promise((resolve) => {
+      for (let index = 0; index < tasks.length; index++) {
+        const handle = startScopedTask(
+          owner,
+          tasks[index] as ScopeTask<any, any>,
+        )
+        handles[index] = handle
+
+        void handle.promise.then((result) => {
+          if (settled) return
+          handles[index] = undefined
+
+          if (result._tag === 'Left') {
+            errors ??= []
+            errors[index] = result.error
+            remaining--
+            if (remaining > 0) return
+
+            settled = true
+            const finalResult = left(errors)
+            owner.fail(finalResult)
+            resolve(finalResult)
+            return
+          }
+
+          settled = true
+          void abortAndCollectScopedTasks(
+            handles,
+            siblingSettled(),
+            index,
+          ).then((cleanupFailures) => {
+            const cleanupFailure = leftFromCleanupFailures(cleanupFailures)
+            if (cleanupFailure !== undefined) {
+              owner.fail(cleanupFailure)
+              resolve(cleanupFailure)
+              return
+            }
+
+            resolve(result)
+          })
+        })
+      }
+    })
+  }
+
+  // oxlint-disable-next-line typescript/promise-function-async
   function forkRaceScopedTasks<const T extends readonly ScopeTask<any, any>[]>(
     owner: ScopeRuntime,
     tasks: T,
@@ -396,7 +469,9 @@ function createScopeRuntime(parent?: AbortSignal): ScopeRuntime {
     }
   }
 
-  function ensureForkEnabled(method: 'fork' | 'forkAll' | 'forkRace'): void {
+  function ensureForkEnabled(
+    method: 'fork' | 'forkAll' | 'forkFirst' | 'forkRace',
+  ): void {
     if (!forkEnabled) {
       throw new TypeError(
         `signal.${method}() is only available in async either`,

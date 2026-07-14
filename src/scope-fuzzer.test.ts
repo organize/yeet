@@ -4,7 +4,7 @@ import { type Rejected, type ScopeSignal, type ScopeTask } from './async.ts'
 import { either } from './combinators.ts'
 import { type Either, left, right } from './either.ts'
 
-type Mode = 'fork' | 'forkAll' | 'forkRace'
+type Mode = 'fork' | 'forkAll' | 'forkFirst' | 'forkRace'
 
 type FuzzError =
   | { readonly _tag: 'TaskFailed'; readonly id: number }
@@ -86,8 +86,8 @@ type FuzzTask = {
 }
 
 describe('scoped signal fuzzer', () => {
-  it('fuzzes fork/forkAll/forkRace settlement and abort interleavings', async () => {
-    for (let seed = 1; seed <= 180; seed++) {
+  it('fuzzes fork/forkAll/forkFirst/forkRace settlement and abort interleavings', async () => {
+    for (let seed = 1; seed <= 240; seed++) {
       const scenario = createScenario(seed)
       try {
         await runScenario(scenario)
@@ -240,6 +240,12 @@ async function* runScopedMode(
     return { mode, value, after }
   }
 
+  if (mode === 'forkFirst') {
+    const value = yield* await signal.forkFirst(scopedTasks)
+    const after = yield* right('after' as const)
+    return { mode, value, after }
+  }
+
   if (mode === 'forkAll') {
     const values = yield* await signal.forkAll(scopedTasks)
     return { mode, values }
@@ -350,6 +356,8 @@ function computeExpected(
   const rejectOnAbort = new Set<number>()
   const values: FuzzValue[] = []
   values.length = tasks.length
+  const errors: unknown[] = []
+  errors.length = tasks.length
 
   for (let index = 0; index < scenario.operations.length; index++) {
     const operation = scenario.operations[index] as Operation
@@ -378,7 +386,7 @@ function computeExpected(
     pending.delete(task.id)
 
     if (operation.kind === 'right') {
-      if (scenario.mode === 'forkRace') {
+      if (scenario.mode === 'forkRace' || scenario.mode === 'forkFirst') {
         const cleanupRejectIds = intersectSets(pending, rejectOnAbort)
         const cleanupFailures = cleanupFailuresForIds(cleanupRejectIds, tasks)
         if (cleanupFailures.length > 0) {
@@ -393,7 +401,7 @@ function computeExpected(
 
         return {
           _tag: 'Right',
-          value: { mode: 'forkRace', value: task.value, after: 'after' },
+          value: { mode: scenario.mode, value: task.value, after: 'after' },
           abortIds: new Set(pending),
           cleanupRejectIds,
           terminalIndex: index,
@@ -413,13 +421,29 @@ function computeExpected(
       continue
     }
 
+    const taskError =
+      operation.kind === 'left'
+        ? task.leftError
+        : ({ _tag: 'Rejected', cause: task.rejectCause } satisfies Rejected)
+
+    if (scenario.mode === 'forkFirst') {
+      errors[task.id] = taskError
+      if (pending.size > 0) continue
+
+      return {
+        _tag: 'Left',
+        error: errors,
+        abortIds: new Set(),
+        cleanupRejectIds: new Set(),
+        terminalIndex: index,
+      }
+    }
+
     const cleanupRejectIds = intersectSets(pending, rejectOnAbort)
     return {
       _tag: 'Left',
       error: withCleanupFailures(
-        operation.kind === 'left'
-          ? task.leftError
-          : ({ _tag: 'Rejected', cause: task.rejectCause } satisfies Rejected),
+        taskError,
         cleanupFailuresForIds(cleanupRejectIds, tasks),
       ),
       abortIds: new Set(pending),
@@ -554,7 +578,12 @@ function assertNestedExpectedResult(
 
 function createScenario(seed: number): Scenario {
   const random = mulberry32(seed)
-  const mode = pick(random, ['fork', 'forkAll', 'forkRace'] as const)
+  const mode = pick(random, [
+    'fork',
+    'forkAll',
+    'forkFirst',
+    'forkRace',
+  ] as const)
   const taskCount = 1 + randomInt(random, 5)
   const ids = shuffled(
     random,

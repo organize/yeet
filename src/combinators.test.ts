@@ -5,6 +5,7 @@ import {
   type Exit,
   type ExitError,
   type Rejected,
+  type ScopeTask,
   siblingSettled,
 } from './async.ts'
 import {
@@ -19,6 +20,7 @@ import {
   ensureNotNull,
 } from './combinators.ts'
 import { left, right, type Either } from './either.ts'
+import { exitSchema, type StandardSchemaV1 } from './schema.ts'
 
 function expectLeft<E>(result: Either<E, unknown>, error: E) {
   expect(result._tag).toBe('Left')
@@ -136,12 +138,19 @@ const rawFetch = async (url: string): Promise<{ data: string }> => {
 function deferred<T>(): {
   promise: Promise<T>
   resolve: (value: T) => void
+  reject: (cause: unknown) => void
 } {
   let resolve: (value: T) => void = () => {}
-  const promise = new Promise<T>((res) => {
+  let reject: (cause: unknown) => void = () => {}
+  const promise = new Promise<T>((res, rej) => {
     resolve = res
+    reject = rej
   })
-  return { promise, resolve }
+  return { promise, resolve, reject }
+}
+
+async function flushAsyncWork(): Promise<void> {
+  for (let index = 0; index < 5; index++) await Promise.resolve()
 }
 
 type TrackedDisposable = Disposable & { readonly name: string }
@@ -452,6 +461,328 @@ describe('either scoped signal', () => {
     expect(reasons).toEqual(['Boom'])
   })
 
+  it('runs every forkFirst task and keeps racing after Left and Rejected candidates', async () => {
+    const first = deferred<Either<'FirstFailed', number>>()
+    const second = deferred<Either<'SecondFailed', string>>()
+    const third = deferred<Either<'ThirdFailed', boolean>>()
+    const cause = new Error('second exploded')
+    const started: number[] = []
+
+    const resultPromise = either(async function* ({ signal }) {
+      return yield* await signal.forkFirst([
+        async () => {
+          started.push(0)
+          return first.promise
+        },
+        async () => {
+          started.push(1)
+          return second.promise
+        },
+        async () => {
+          started.push(2)
+          return third.promise
+        },
+      ] as const)
+    })
+    const typed: Promise<
+      Exit<
+        [
+          ExitError<'FirstFailed'>,
+          ExitError<'SecondFailed'>,
+          ExitError<'ThirdFailed'>,
+        ],
+        number | string | boolean
+      >
+    > = resultPromise
+
+    expect(typed).toBe(resultPromise)
+    expect(started).toEqual([0, 1, 2])
+
+    first.resolve(left('FirstFailed'))
+    second.reject(cause)
+    await flushAsyncWork()
+    third.resolve(right(true))
+
+    expectRight(await resultPromise, true)
+  })
+
+  it('returns all forkFirst failures in input order', async () => {
+    const first = deferred<Either<'FirstFailed', number>>()
+    const second = deferred<Either<'SecondFailed', string>>()
+
+    const resultPromise = either(async function* ({ signal }) {
+      return yield* await signal.forkFirst([
+        async () => first.promise,
+        async () => second.promise,
+      ] as const)
+    })
+
+    second.resolve(left('SecondFailed'))
+    await flushAsyncWork()
+    first.resolve(left('FirstFailed'))
+
+    expectLeft(await resultPromise, ['FirstFailed', 'SecondFailed'])
+  })
+
+  it('round-trips ordered forkFirst failures through exitSchema', async () => {
+    type OpenAIFailure = {
+      readonly _tag: 'OpenAIUnavailable'
+      readonly status: number
+    }
+    type AnthropicFailure = {
+      readonly _tag: 'AnthropicUnavailable'
+      readonly requestId: string
+    }
+    type ProviderFailures = [OpenAIFailure, AnthropicFailure]
+
+    const openAI = deferred<Either<OpenAIFailure, string>>()
+    const anthropic = deferred<Either<AnthropicFailure, string>>()
+    const resultPromise = either(async function* ({ signal }) {
+      return yield* await signal.forkFirst([
+        async () => openAI.promise,
+        async () => anthropic.promise,
+      ] as const)
+    })
+
+    anthropic.resolve(
+      left({ _tag: 'AnthropicUnavailable', requestId: 'req-2' }),
+    )
+    await flushAsyncWork()
+    openAI.resolve(left({ _tag: 'OpenAIUnavailable', status: 503 }))
+
+    const result = await resultPromise
+    const providerFailuresSchema = {
+      '~standard': {
+        version: 1,
+        vendor: 'test',
+        validate(value: unknown) {
+          if (!Array.isArray(value) || value.length !== 2)
+            return { issues: [{ message: 'Expected provider failure tuple' }] }
+
+          const [first, second] = value as [
+            Partial<OpenAIFailure>,
+            Partial<AnthropicFailure>,
+          ]
+          return first._tag === 'OpenAIUnavailable' &&
+            typeof first.status === 'number' &&
+            second._tag === 'AnthropicUnavailable' &&
+            typeof second.requestId === 'string'
+            ? { value: value as ProviderFailures }
+            : { issues: [{ message: 'Expected provider failure tuple' }] }
+        },
+      },
+    } satisfies StandardSchemaV1<unknown, ProviderFailures>
+    const schema = exitSchema({
+      error: providerFailuresSchema,
+    })
+    const wireValue: unknown = JSON.parse(JSON.stringify(result))
+    const hydrated = await schema['~standard'].validate(wireValue)
+
+    expect(hydrated.issues).toBeUndefined()
+    if (hydrated.issues !== undefined) return
+    expectLeft(hydrated.value, [
+      { _tag: 'OpenAIUnavailable', status: 503 },
+      { _tag: 'AnthropicUnavailable', requestId: 'req-2' },
+    ])
+  })
+
+  it('widens forkFirst failures for dynamic task arrays', async () => {
+    const tasks: ScopeTask<'Unavailable', number>[] = [
+      () => left('Unavailable'),
+      () => right(2),
+    ]
+
+    const resultPromise = either(async function* ({ signal }) {
+      return yield* await signal.forkFirst(tasks)
+    })
+    const typed: Promise<Exit<ExitError<'Unavailable'>[], number>> =
+      resultPromise
+
+    expect(typed).toBe(resultPromise)
+    expectRight(await resultPromise, 2)
+  })
+
+  it('aborts forkFirst losers with SiblingSettled and awaits cleanup', async () => {
+    const winner = deferred<Either<'WinnerFailed', 'winner'>>()
+    const cleanup = deferred<void>()
+    const events: string[] = []
+    const reasons: unknown[] = []
+    let resultSettled = false
+
+    const resultPromise = either(async function* ({ signal }) {
+      return yield* await signal.forkFirst([
+        async (child) => {
+          events.push('loser:start')
+          await new Promise<void>((resolve) => {
+            child.addEventListener(
+              'abort',
+              () => {
+                reasons.push(child.reason)
+                events.push('loser:cleanup:start')
+                resolve()
+              },
+              { once: true },
+            )
+          })
+          await cleanup.promise
+          events.push('loser:cleanup:end')
+          return left('LoserStopped' as const)
+        },
+        async () => winner.promise,
+      ] as const)
+    })
+    void resultPromise.then(() => {
+      resultSettled = true
+    })
+
+    winner.resolve(right('winner'))
+    await flushAsyncWork()
+
+    expect(resultSettled).toBe(false)
+    expect(events).toEqual(['loser:start', 'loser:cleanup:start'])
+    expect(reasons).toEqual([siblingSettled()])
+
+    cleanup.resolve()
+    expectRight(await resultPromise, 'winner')
+    expect(events).toEqual([
+      'loser:start',
+      'loser:cleanup:start',
+      'loser:cleanup:end',
+    ])
+  })
+
+  it('returns Rejected when one forkFirst loser rejects during cleanup', async () => {
+    const cause = new Error('close failed')
+
+    const result = await either(async function* ({ signal }) {
+      return yield* await signal.forkFirst([
+        async (child) => await rejectOnAbort(child, cause),
+        () => right('winner' as const),
+      ] as const)
+    })
+
+    expectLeft(result, { _tag: 'Rejected', cause })
+  })
+
+  it('suppresses multiple forkFirst loser cleanup rejections', async () => {
+    const first = new Error('first close failed')
+    const second = new Error('second close failed')
+
+    const result = await either(async function* ({ signal }) {
+      return yield* await signal.forkFirst([
+        async (child) => await rejectOnAbort(child, first),
+        async (child) => await rejectOnAbort(child, second),
+        () => right('winner' as const),
+      ] as const)
+    })
+
+    expectLeft(result, {
+      _tag: 'Suppressed',
+      error: { _tag: 'Rejected', cause: first },
+      suppressed: [{ _tag: 'Rejected', cause: second }],
+    })
+  })
+
+  it('keeps candidate cleanup failures in their forkFirst error slots', async () => {
+    const cause = new Error('nested close failed')
+
+    const result = await either(async function* ({ signal }) {
+      return yield* await signal.forkFirst([
+        async (child) => {
+          void child.fork(async (grandchild) =>
+            rejectOnAbort(grandchild, cause),
+          )
+          return left('PrimaryFailed' as const)
+        },
+        () => left('OtherFailed' as const),
+      ] as const)
+    })
+
+    expectLeft(result, [
+      {
+        _tag: 'Suppressed',
+        error: 'PrimaryFailed',
+        suppressed: [{ _tag: 'Rejected', cause }],
+      },
+      'OtherFailed',
+    ])
+  })
+
+  it('returns Left([]) for an empty forkFirst', async () => {
+    const resultPromise = either(async function* ({ signal }) {
+      return yield* await signal.forkFirst([] as const)
+    })
+    const typed: Promise<Exit<[], never>> = resultPromise
+
+    expect(typed).toBe(resultPromise)
+    expectLeft(await resultPromise, [])
+  })
+
+  it('fails the scope when an empty forkFirst result is detached', async () => {
+    const result = await either(
+      // oxlint-disable-next-line require-yield
+      async function* ({ signal }) {
+        void signal.forkFirst([] as const)
+        await Promise.resolve()
+        return 'unreachable' as const
+      },
+    )
+
+    expectLeft(result, [])
+  })
+
+  it('lets parent abort dominate forkFirst candidates', async () => {
+    const controller = new AbortController()
+    const reasons: unknown[] = []
+
+    const resultPromise = either(
+      controller.signal,
+      async function* ({ signal }) {
+        return yield* await signal.forkFirst([
+          async (child) => {
+            const result = await abortAsLeft(child, 'Stopped' as const)
+            reasons.push(child.reason)
+            return result
+          },
+          async (child) => {
+            const result = await abortAsLeft(child, 'Stopped' as const)
+            reasons.push(child.reason)
+            return result
+          },
+        ] as const)
+      },
+    )
+
+    controller.abort('ParentStopped')
+
+    expectLeft(await resultPromise, {
+      _tag: 'Aborted',
+      reason: 'ParentStopped',
+    })
+    expect(reasons).toEqual(['ParentStopped', 'ParentStopped'])
+  })
+
+  it('does not start forkFirst work in an already-aborted scope', async () => {
+    const controller = new AbortController()
+    controller.abort('AlreadyDone')
+    let starts = 0
+
+    const result = await either(
+      controller.signal,
+      async function* ({ signal }) {
+        return yield* await signal.forkFirst([
+          () => {
+            starts++
+            return right('started' as const)
+          },
+        ] as const)
+      },
+    )
+
+    expect(starts).toBe(0)
+    expectLeft(result, { _tag: 'Aborted', reason: 'AlreadyDone' })
+  })
+
   it('lets signal.forkRace return the first Right without poisoning the scope', async () => {
     const events: string[] = []
     const reasons: unknown[] = []
@@ -733,13 +1064,20 @@ describe('either scoped signal', () => {
     ).toThrow('signal.fork() is only available in async either')
   })
 
-  it('does not enable signal.forkAll or signal.forkRace inside sync either', () => {
+  it('does not enable scoped batch methods inside sync either', () => {
     expect(() =>
       either(function* ({ signal }) {
         void signal.forkAll([])
         return yield* right(1)
       }),
     ).toThrow('signal.forkAll() is only available in async either')
+
+    expect(() =>
+      either(function* ({ signal }) {
+        void signal.forkFirst([])
+        return yield* right(1)
+      }),
+    ).toThrow('signal.forkFirst() is only available in async either')
 
     expect(() =>
       either(function* ({ signal }) {
