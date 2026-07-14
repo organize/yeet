@@ -46,7 +46,8 @@ The injected callback parameter is a callable `RaiseContext`; prefer
 child signal is passed as the callback's second argument for compatibility.
 
 Inside async `either`, that signal also has `fork(task)`, `forkAll(tasks)`,
-`forkFirst(tasks)`, and `forkRace(tasks)`. Use these for scoped child work;
+`forkFirst(tasks)`, `forkRace(tasks)`, and `forkEach(items, options, task)`. Use
+these for scoped child work;
 every task receives a child `ScopeSignal`. A forked child `Left`, a scoped
 `forkAll` / `forkRace` failure, parent abort, or normal scope close aborts
 sibling work. `forkFirst` is different: candidate `Left` and `Rejected` values
@@ -81,6 +82,29 @@ candidate failures do not stop siblings, and all-failed errors are returned in
 input order. Use `yield* await signal.forkRace([...])` when the first child
 outcome wins; a winning `Right` aborts losers without poisoning the enclosing
 `either`.
+
+Use `signal.forkEach(items, { concurrency }, task)` for lazy bounded fan-out
+over an `Iterable` or `AsyncIterable`. It yields `{ item, index, result }`
+completions in settlement order. Each `result` is an `Exit`: `yield* result` to
+fail fast, or inspect it and continue. Breaking iteration, calling `.return()`,
+or async-disposing the iterator closes the source, aborts unfinished tasks with
+`forkEachStopped()`, and awaits teardown. Mapper failures are completion data;
+source-iterator failures fail the owning scope as `Left<Rejected>`.
+
+```ts
+const result = await either(async function* ({ signal }) {
+  for await (const { item, result } of signal.forkEach(
+    documents,
+    { concurrency: 8 },
+    (document, signal) => embed(document, signal),
+  )) {
+    const embedding = yield* result
+    yield* await saveEmbedding(item.id, embedding)
+  }
+  return 'indexed' as const
+})
+// Promise resolves to Either<Aborted | Rejected | EmbedError | SaveError, 'indexed'>
+```
 
 ## Streams
 
@@ -148,7 +172,11 @@ cause, or the fatal stream error.
 
 ## Other helpers
 
-Use `capture` to treat a `Left` as data, `all` for concurrent tuple inputs,
+Use `raise.capture(work)` to treat an outcome as local data without
+short-circuiting. Existing Eithers pass through by identity; thunks and promises
+flatten returned Eithers and convert throws/rejections to `Left<Rejected>`. Do
+not `yield*` the result unless you deliberately want to propagate it. Use `all`
+for concurrent tuple inputs,
 `collectAll` to partition concurrent inputs, `validate` to accumulate all
 errors, `firstOf` for first success, and `collect` to partition yielded values.
 Use `suppressed(error, failures)` only when manually constructing the scoped
@@ -160,6 +188,6 @@ Serialization helpers: `fromJSON`, `isSerializedEither`,
 
 Optional optimizer: import a bundler adapter from `@big-time/yeet/unplugin/*`
 to lower supported inline generator calls at build time. Inside lowered
-`either`, direct `right`, `left`, `capture`, `ensure`, and `ensureNotNull` steps
+`either`, direct `right`, `left`, `ensure`, and `ensureNotNull` steps
 are fused so they do not allocate an intermediate `Either`; immutable `const`
 aliases and `{ raise }` / `{ raise: fail }` parameters are also supported.
