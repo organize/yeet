@@ -51,6 +51,7 @@ export type {
   ScopeSignal,
   ScopeTask,
   ScopeTaskError,
+  ScopeTaskErrors,
   ScopeTaskValue,
   ScopeTaskValues,
   SiblingSettled,

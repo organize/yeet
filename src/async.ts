@@ -196,6 +196,11 @@ export type ScopeTaskValues<T extends readonly ScopeTask<any, any>[]> = {
   -readonly [K in keyof T]: ScopeTaskValue<T[K]>
 }
 
+/** Position-preserving failures produced when every `forkFirst` task fails. */
+export type ScopeTaskErrors<T extends readonly ScopeTask<any, any>[]> = {
+  -readonly [K in keyof T]: ExitError<ScopeTaskError<T[K]>>
+}
+
 /**
  * An `AbortSignal` enriched with scoped child work for async `either` flows.
  */
@@ -210,6 +215,9 @@ export type ScopeSignal = AbortSignal & {
   forkAll<const T extends readonly ScopeTask<any, any>[]>(
     tasks: T,
   ): Promise<Exit<ScopeTaskError<T[number]>, ScopeTaskValues<T>>>
+  forkFirst<const T extends readonly ScopeTask<any, any>[]>(
+    tasks: T,
+  ): Promise<Exit<ScopeTaskErrors<T>, ScopeTaskValue<T[number]>>>
   forkRace<const T extends readonly ScopeTask<any, any>[]>(
     tasks: T,
   ): Promise<Exit<ScopeTaskError<T[number]>, ScopeTaskValue<T[number]>>>

@@ -14,6 +14,10 @@ type BenchModule = {
   eitherTwoYieldsSuccess: (index: number) => unknown
   eitherSingleYieldLeft: (index: number) => unknown
   eitherYieldRaise: (index: number) => unknown
+  eitherFusedGuardsSuccess: (index: number) => unknown
+  eitherFusedGuardsLeft: (index: number) => unknown
+  eitherFusedCaptureRight: (index: number) => unknown
+  eitherFusedCaptureLeft: (index: number) => unknown
   eitherAsyncTwoYieldsSuccess: (index: number) => Promise<unknown>
   eitherAsyncSingleYieldLeft: (index: number) => Promise<unknown>
   validateAllPass: (index: number) => unknown
@@ -50,6 +54,9 @@ const BENCH_SOURCE = `
     validate,
     firstOf,
     collect,
+    capture,
+    ensure,
+    ensureNotNull,
     left,
     right,
   } from ${JSON.stringify(YEET_SOURCE)}
@@ -60,6 +67,9 @@ const BENCH_SOURCE = `
   }
   const HIT_IDS = ["1", "2"]
   const MISS_IDS = ["missing-a", "missing-b"]
+  const EMPTY_IDS = ["", ""]
+  const CACHE_HITS = [right("cached-a"), right("cached-b")]
+  const CACHE_MISSES = [left("CacheMissA"), left("CacheMissB")]
   const ORDERS = {
     "1": [{ id: "order-1", userId: "1" }],
     "2": [{ id: "order-2", userId: "2" }],
@@ -154,6 +164,42 @@ const BENCH_SOURCE = `
   export function eitherYieldRaise(index) {
     return either(function* (raise) {
       return raise(bit(index) === 0 ? "BoomA" : "BoomB")
+    })
+  }
+
+  export function eitherFusedGuardsSuccess(index) {
+    const candidate = HIT_IDS[bit(index)]
+    return either(function* () {
+      const id = yield* ensureNotNull(candidate, () => "MissingId")
+      yield* ensure(id.length > 0, () => "EmptyId")
+      const normalized = yield* right(id.toUpperCase())
+      return normalized.length
+    })
+  }
+
+  export function eitherFusedGuardsLeft(index) {
+    const candidate = EMPTY_IDS[bit(index)]
+    return either(function* () {
+      const id = yield* ensureNotNull(candidate, () => "MissingId")
+      yield* ensure(id.length > 0, () => "EmptyId")
+      return id.length
+    })
+  }
+
+  export function eitherFusedCaptureRight(index) {
+    return either(function* () {
+      const cached = yield* capture(CACHE_HITS[bit(index)])
+      if (cached._tag === "Right") return cached.value
+      return yield* getUser(HIT_IDS[bit(index)])
+    })
+  }
+
+  export function eitherFusedCaptureLeft(index) {
+    return either(function* () {
+      const cached = yield* capture(CACHE_MISSES[bit(index)])
+      if (cached._tag === "Right") return cached.value
+      const user = yield* getUser(HIT_IDS[bit(index)])
+      return user.name
     })
   }
 
@@ -366,6 +412,23 @@ describe('baseline (plain functions, no Either)', () => {
 benchPair('either (sync)', 'single yield, success', 'eitherSingleYieldSuccess')
 benchPair('either (sync)', 'two yields, success', 'eitherTwoYieldsSuccess')
 benchPair('either (sync)', 'single yield, Left', 'eitherSingleYieldLeft')
+
+benchPair(
+  'either (fused intrinsics)',
+  'guards, success',
+  'eitherFusedGuardsSuccess',
+)
+benchPair('either (fused intrinsics)', 'guards, Left', 'eitherFusedGuardsLeft')
+benchPair(
+  'either (fused intrinsics)',
+  'capture, Right',
+  'eitherFusedCaptureRight',
+)
+benchPair(
+  'either (fused intrinsics)',
+  'capture, Left then fallback',
+  'eitherFusedCaptureLeft',
+)
 
 describe('either (sync)', () => {
   const next = indexer()
