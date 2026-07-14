@@ -1,6 +1,6 @@
 # yeet
 
-> Dependency-free. Tree-shakeable. Side-effect free. About 4.0 kB gzipped for
+> Dependency-free. Tree-shakeable. Side-effect free. About 4.1 kB gzipped for
 > the core, with stream helpers on a separate 2.9 kB subpath.
 
 `yeet` is what happens when `Either` stops being a ceremonial robe and starts
@@ -367,6 +367,10 @@ but also destructurable when you want the signal without the awkward little
 shadow puppet of `raise.signal` everywhere.
 
 ```ts
+type ScopeTaskErrors<T extends readonly ScopeTask<any, any>[]> = {
+  -readonly [K in keyof T]: ExitError<ScopeTaskError<T[K]>>
+}
+
 type ScopeSignal = AbortSignal & {
   fork<E, A>(
     task: (signal: ScopeSignal) => Either<E, A> | PromiseLike<Either<E, A>>,
@@ -374,6 +378,9 @@ type ScopeSignal = AbortSignal & {
   forkAll<const T extends readonly ScopeTask<any, any>[]>(
     tasks: T,
   ): Promise<Exit<ScopeTaskError<T[number]>, ScopeTaskValues<T>>>
+  forkFirst<const T extends readonly ScopeTask<any, any>[]>(
+    tasks: T,
+  ): Promise<Exit<ScopeTaskErrors<T>, ScopeTaskValue<T[number]>>>
   forkRace<const T extends readonly ScopeTask<any, any>[]>(
     tasks: T,
   ): Promise<Exit<ScopeTaskError<T[number]>, ScopeTaskValue<T[number]>>>
@@ -450,14 +457,23 @@ type Suppressed<E = unknown> = {
 ```
 
 So a first `Left` still wins, but a sibling socket that throws while closing is
-not tossed into the tall grass. If a `forkRace` winner was a `Right` and a loser
-rejects during abort cleanup, the scoped race returns that cleanup failure as
-`Left<Rejected>`.
+not tossed into the tall grass. If a `forkFirst` or `forkRace` winner was a
+`Right` and a loser rejects during abort cleanup, the scoped operation returns
+that cleanup failure as `Left<Rejected>`.
 
 For the cleanest inferred error unions, `yield* await` the fork promises you
 care about, as above. TypeScript cannot see the error type of a detached fork
 that is started and never referenced again; JavaScript may be magical, but it is
 not yet clairvoyant.
+
+The four scoped methods answer four different questions:
+
+| Method                    | Returns when                        | Failure behavior                                          |
+| ------------------------- | ----------------------------------- | --------------------------------------------------------- |
+| `signal.fork(task)`       | That child settles                  | A `Left` or rejection fails the owning scope              |
+| `signal.forkAll(tasks)`   | Every child returns `Right`         | First failure cancels the remaining siblings              |
+| `signal.forkFirst(tasks)` | Any child returns `Right`           | Failures accumulate; exhaustion returns an ordered tuple  |
+| `signal.forkRace(tasks)`  | Any child returns `Right` or `Left` | The first outcome wins and cancels the remaining siblings |
 
 When the work is naturally a batch, use `signal.forkAll`. It starts every task
 with a child signal, returns values in input order, and cancels siblings on the
@@ -476,6 +492,56 @@ const result = await either(async function* ({ signal }) {
 // inferred:
 // Promise<Either<Aborted | Rejected | FetchUserError | FetchSettingsError, { user: User; settings: Settings }>>
 ```
+
+Use `signal.forkFirst` when every candidate starts now but only the first
+`Right` wins. A `Left` or rejection is recorded while viable siblings keep
+running. Once a `Right` arrives, unfinished candidates are aborted with
+`siblingSettled()` and awaited. If everything fails, the result is a
+position-preserving error tuple in input order.
+
+```ts
+const result = await either(async function* ({ signal }) {
+  const answer = yield* await signal.forkFirst([
+    (signal) => askOpenAI(prompt, signal),
+    (signal) => askAnthropic(prompt, signal),
+    (signal) => askLocalModel(prompt, signal),
+  ] as const)
+
+  return answer
+})
+
+// inferred:
+// Promise<
+//   Exit<
+//     [
+//       ExitError<OpenAIError>,
+//       ExitError<AnthropicError>,
+//       ExitError<LocalModelError>
+//     ],
+//     Completion
+//   >
+// >
+```
+
+That same shape covers replica reads without making the fastest outage defeat a
+slightly slower healthy node:
+
+```ts
+const result = await either(async function* ({ signal }) {
+  const user = yield* await signal.forkFirst([
+    (signal) => readReplica('eu-west', id, signal),
+    (signal) => readReplica('eu-north', id, signal),
+    (signal) => readPrimary(id, signal),
+  ] as const)
+
+  return user
+})
+// inferred success: User
+// all-failed result preserves each replica error by position
+```
+
+`signal.forkFirst([])` returns `Left([])`: there was no candidate that could
+possibly succeed, and no exceptional ceremony is required to say so.
 
 Use `signal.forkRace` when the first typed outcome wins. A winning `Right`
 aborts the losers with `siblingSettled()` (`{ _tag: 'SiblingSettled' }`) without
@@ -509,7 +575,7 @@ gives you `x`. Yeet does not comb its hair into a library-shaped error for you.
 
 Inside scoped child tasks, avoid returning a domain-flavored
 `Left<{ _tag: 'Cancelled' }>` solely because `signal.aborted`. It widens the
-task's error union, and losing fork/race tasks are discarded anyway. Let the
+task's error union, and losing forked tasks are discarded anyway. Let the
 operation honor the signal, reserve `Left` for failures the parent should see,
 and let yeet's `Aborted` / `SiblingSettled` values explain the cancellation.
 
@@ -875,7 +941,8 @@ was won.
 ### Try The First Success With `firstOf`
 
 `firstOf` tries yielded `Either`s in order and returns the first `Right`. If they
-all fail, it returns every error:
+all fail, it returns every error. For concurrent, cancellation-aware attempts
+inside async `either`, use `signal.forkFirst` instead.
 
 ```ts
 import { firstOf } from '@big-time/yeet'
@@ -1157,8 +1224,10 @@ software that enjoys receiving small rectangles of truth.
 Yeet ships an optional unplugin optimizer. Your source stays the same; the
 plugin looks for inline generator calls to `either`, `validate`, `firstOf`, and
 `collect` that it can prove, then lowers them into plain early-return or
-accumulator JavaScript. If it cannot prove the shape, it leaves the original
-runtime call exactly where it found it.
+accumulator JavaScript. It also fuses yeet's own constructors, guards, and
+`capture` when they are consumed immediately, removing intermediate `Either`
+values as well as the generator. If it cannot prove the shape, it leaves the
+original runtime call exactly where it found it.
 
 No spooky action at a distance. Just a little stagehand moving furniture before
 the curtain rises.
@@ -1188,7 +1257,7 @@ The optimizer is binding-scoped, so aliased imports work while shadowed locals
 are politely ignored:
 
 ```ts
-import { either as e } from '@big-time/yeet'
+import { either as e, right } from '@big-time/yeet'
 
 const result = e(function* () {
   return yield* right(42)
@@ -1197,13 +1266,69 @@ const result = e(function* () {
 // inferred: Either<never, number>
 ```
 
+The optimizer understands a few yeet primitives deeply enough to erase the
+whole produce-then-consume boundary:
+
+```ts
+import {
+  capture,
+  either,
+  ensure,
+  ensureNotNull,
+  type Either,
+} from '@big-time/yeet'
+
+const result = either(function* () {
+  const id = yield* ensureNotNull(input.id, () => 'MissingId' as const)
+  yield* ensure(id.length > 0, () => 'EmptyId' as const)
+  const cached = yield* capture(readCache(id))
+  return { id, cached }
+})
+// inferred:
+// Either<
+//   "MissingId" | "EmptyId",
+//   { id: string; cached: Either<CacheError, Cached> }
+// >
+```
+
+Conceptually, that becomes:
+
+```ts
+import { left, right } from '@big-time/yeet'
+
+const lowered = (() => {
+  const id = input.id
+  if (id == null) return left('MissingId' as const)
+  if (!(id.length > 0)) return left('EmptyId' as const)
+  const cached = readCache(id)
+  return right({ id, cached })
+})()
+// inferred:
+// Either<
+//   "MissingId" | "EmptyId",
+//   { id: string; cached: Either<CacheError, Cached> }
+// >
+```
+
+The actual lowering preserves JavaScript evaluation order and lazy error
+construction, including evaluating a guard's callback expression on success but
+only calling it on failure. Tiny details, yes. Tiny details are where compilers
+hide the knives.
+
 It lowers these proven shapes:
 
 - direct `yield* someEither()` steps in `either`
+- immutable `const` aliases initialized from a proven Either-producing call
+- direct `yield* right(...)`, `yield* left(...)`, `yield* capture(...)`,
+  `yield* ensure(...)`, and `yield* ensureNotNull(...)` steps, with unnecessary
+  intermediate `Either` values fused away
 - direct `yield* await somePromiseReturningEither()` steps in async `either`,
   including bounded stream helpers like `json(body)` and `collectText(stream)`
 - direct `yield* next` steps where `next` is a `const` binding from
   `for await (const next of ndjson(...) | sse(...) | lines(...) | chunks(...))`
+- callable `raise` parameters written as either `raise` or `{ raise }`, including
+  aliases such as `{ raise: fail }`, when no scoped signal is requested
+- statically primitive final returns without a redundant structural `Left` check
 - direct `yield* check(someEither())` steps in `validate`
 - direct `yield someEither` attempts in `firstOf` and `collect`
 
@@ -1220,6 +1345,10 @@ JIT's morning mood, but the shape is the useful part:
 | `either`: async `Left` short-circuit            | `~7.3x`   |
 | `validate`: two checks                          | `~10x`    |
 | `firstOf`: three attempts                       | `~10-11x` |
+| Fused guards: success                           | `~15x`    |
+| Fused guards: `Left`                            | `~28x`    |
+| Fused `capture`: cached `Right`                 | `~21x`    |
+| Fused `capture`: `Left` then fallback           | `~15x`    |
 | Stream: `yield* await json(body)`               | `~2.6x`   |
 | Stream: `yield* next` in `ndjson` / `sse` loops | `~1.2x`   |
 | `collect`: many yielded items                   | `~1x`     |
@@ -1228,12 +1357,17 @@ Tiny flows win hardest because the generator driver is most of the work. Once
 you are parsing JSON, walking many items, or calling real I/O, the plugin still
 removes the do-notation overhead, but the river is wider than the boat.
 
+The fusion rows compare the same guard and cache-fallback source through runtime
+`either` and through the real unplugin on a quick Node 26 run. They include both
+generator erasure and intrinsic fusion; they are end-to-end numbers, not an
+attempt to make one compiler pass look taller in the mirror.
+
 It bails on the abortable overload, escaped `raise` / `check`, `this`,
-`arguments`, unproven indirect `yield*` values, non-`const` stream item
-bindings, stream helpers from other modules, and expression positions where
-hoisting would change evaluation. The runtime library remains the interpreter
-underneath, as dependable as a man in a dark suit explaining how rain becomes a
-river.
+`arguments`, mutable or unproven indirect `yield*` values, scoped context
+destructuring, non-`const` stream item bindings, stream helpers from other
+modules, and expression positions where hoisting would change evaluation. The
+runtime library remains the interpreter underneath, as dependable as a man in
+a dark suit explaining how rain becomes a river.
 
 ## Low-Level Folding
 
@@ -1278,13 +1412,14 @@ the keys to the old truck.
 
 ### Concurrency
 
-| API                      | Description                                                          |
-| ------------------------ | -------------------------------------------------------------------- |
-| `all(inputs)`            | Run independent inputs concurrently and short-circuit by input order |
-| `collectAll(inputs)`     | Run independent inputs concurrently and partition all outcomes       |
-| `signal.fork(task)`      | Start child work inside the current async `either` scope             |
-| `signal.forkAll(tasks)`  | Run signal-aware child tasks and cancel siblings on first failure    |
-| `signal.forkRace(tasks)` | Return the first child outcome and abort losing tasks                |
+| API                       | Description                                                          |
+| ------------------------- | -------------------------------------------------------------------- |
+| `all(inputs)`             | Run independent inputs concurrently and short-circuit by input order |
+| `collectAll(inputs)`      | Run independent inputs concurrently and partition all outcomes       |
+| `signal.fork(task)`       | Start child work inside the current async `either` scope             |
+| `signal.forkAll(tasks)`   | Run signal-aware child tasks and cancel siblings on first failure    |
+| `signal.forkFirst(tasks)` | Return the first child `Right`, or every error in input order        |
+| `signal.forkRace(tasks)`  | Return the first child outcome and abort losing tasks                |
 
 ### Guards And Async Helpers
 
@@ -1381,9 +1516,9 @@ These benchmarks are intentionally tiny and can be sensitive to runtime noise,
 JIT mood, and passing clouds. Treat them as directional, not holy scripture.
 
 The current benchmark suite compares common `either` flows against
-`better-result`, includes sync, async, short-circuit, validation, first success,
-collection, plugin-transformed scenarios, and stream helpers against vanilla
-async-iteration code.
+`better-result`, includes sync, async, short-circuit, validation, sequential and
+scoped concurrent first success, collection, plugin-transformed scenarios, and
+stream helpers against vanilla async-iteration code.
 
 For a rough overhead map, `src/overhead.bench.ts` compares the same core flows
 four ways. These numbers are from a local quick run and are normalized per row

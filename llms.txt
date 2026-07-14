@@ -45,17 +45,19 @@ The injected callback parameter is a callable `RaiseContext`; prefer
 `async function* ({ signal })` when you only need cancellation. The same enriched
 child signal is passed as the callback's second argument for compatibility.
 
-Inside async `either`, that signal also has `fork(task)`, `forkAll(tasks)`, and
-`forkRace(tasks)`. Use these for scoped child work; every task receives a child
-`ScopeSignal`. A forked child `Left`, a scoped `forkAll` failure, a scoped
-`forkRace` failure, a rejection, parent abort, or normal scope close aborts
-sibling work. When a `forkRace` `Right` wins, losers are aborted with
-`siblingSettled()` (`{ _tag: 'SiblingSettled' }`). These helpers are not root
-exports and are not for sync `either`.
+Inside async `either`, that signal also has `fork(task)`, `forkAll(tasks)`,
+`forkFirst(tasks)`, and `forkRace(tasks)`. Use these for scoped child work;
+every task receives a child `ScopeSignal`. A forked child `Left`, a scoped
+`forkAll` / `forkRace` failure, parent abort, or normal scope close aborts
+sibling work. `forkFirst` is different: candidate `Left` and `Rejected` values
+are collected while viable siblings continue. When `forkFirst` or `forkRace`
+gets a winning `Right`, losers are aborted with `siblingSettled()`
+(`{ _tag: 'SiblingSettled' }`). These helpers are not root exports and are not
+for sync `either`.
 If sibling teardown rejects while a scope is already unwinding, the primary
 failure remains primary and cleanup rejections are attached as `Suppressed`
-Exit-error data. If a `forkRace` `Right` wins but a loser rejects during abort
-cleanup, the race returns `Left<Rejected>`.
+Exit-error data. If a `forkFirst` / `forkRace` `Right` wins but a loser rejects
+during abort cleanup, the operation returns `Left<Rejected>`.
 Inside scoped child tasks, do not return a custom `Left<Cancelled>` solely
 because `signal.aborted`; it widens the task error union and losers are
 discarded. Honor the signal and let yeet surface `Aborted` / `SiblingSettled`.
@@ -74,8 +76,11 @@ const result = await either(async function* ({ signal }) {
 
 For batches, prefer `yield* await signal.forkAll([...])` over detached forks. It
 starts all child tasks, preserves tuple order, and cancels siblings on the first
-failure. Use `yield* await signal.forkRace([...])` when the first child outcome
-wins; a winning `Right` aborts losers without poisoning the enclosing `either`.
+failure. Use `yield* await signal.forkFirst([...])` when the first `Right` wins;
+candidate failures do not stop siblings, and all-failed errors are returned in
+input order. Use `yield* await signal.forkRace([...])` when the first child
+outcome wins; a winning `Right` aborts losers without poisoning the enclosing
+`either`.
 
 ## Streams
 
@@ -154,4 +159,7 @@ Serialization helpers: `fromJSON`, `isSerializedEither`,
 `serializedExitSchema`, `exitSchema`.
 
 Optional optimizer: import a bundler adapter from `@big-time/yeet/unplugin/*`
-to lower supported inline generator calls at build time.
+to lower supported inline generator calls at build time. Inside lowered
+`either`, direct `right`, `left`, `capture`, `ensure`, and `ensureNotNull` steps
+are fused so they do not allocate an intermediate `Either`; immutable `const`
+aliases and `{ raise }` / `{ raise: fail }` parameters are also supported.
