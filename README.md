@@ -60,6 +60,25 @@ built.
 The runtime stays tiny. The source stays boring in the best way. The types do
 the remembering.
 
+## Contents
+
+- [What Do You Think This Program Prints?](#what-do-you-think-this-program-prints)
+- [But I'm Scared](#but-im-scared)
+- [Install](#install)
+- [Quick Start](#quick-start)
+- [Core Model](#core-model)
+- [Synchronous Flows](#synchronous-flows)
+- [Async Flows](#async-flows)
+- [Cancellation](#cancellation)
+- [Streams And Bytes](#streams-and-bytes)
+- [Composition Helpers](#composition-helpers)
+- [Serialization And Schemas](#serialization-and-schemas)
+- [Build-Time Optimizer](#build-time-optimizer)
+- [Low-Level Folding](#low-level-folding)
+- [API Reference](#api-reference)
+- [Benchmarks](#benchmarks)
+- [License](#license)
+
 ## What Do You Think This Program Prints?
 
 Suppose finance sends malformed NDJSON over a chunked Web Stream. Each valid
@@ -679,24 +698,6 @@ The fancier parts are opt-in:
 
 You can start with only `left`, `right`, and `either`. The rest of the library
 waits politely until you ask for it.
-
-## Contents
-
-- [What Do You Think This Program Prints?](#what-do-you-think-this-program-prints)
-- [Install](#install)
-- [Quick Start](#quick-start)
-- [Core Model](#core-model)
-- [Synchronous Flows](#synchronous-flows)
-- [Async Flows](#async-flows)
-- [Cancellation](#cancellation)
-- [Streams And Bytes](#streams-and-bytes)
-- [Composition Helpers](#composition-helpers)
-- [Serialization And Schemas](#serialization-and-schemas)
-- [Build-Time Optimizer](#build-time-optimizer)
-- [Low-Level Folding](#low-level-folding)
-- [API Reference](#api-reference)
-- [Benchmarks](#benchmarks)
-- [License](#license)
 
 ## Install
 
