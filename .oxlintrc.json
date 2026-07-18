@@ -3,7 +3,7 @@
   "options": {
     "typeAware": true,
     "typeCheck": true,
-    "maxWarnings": 10
+    "maxWarnings": 0
   },
   "rules": {
     "typescript/no-unnecessary-type-assertion": "error",
