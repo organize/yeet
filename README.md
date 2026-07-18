@@ -1,7 +1,7 @@
 # yeet
 
-> Dependency-free. Tree-shakeable. Side-effect free. About 5.7 kB gzipped for
-> the core, with stream helpers on a separate 3.1 kB subpath.
+> Dependency-free. Tree-shakeable. Side-effect free. About 5.9 kB gzipped for
+> the core, with stream helpers on a separate 3.0 kB subpath.
 
 `yeet` is what happens when `Either` stops being a ceremonial robe and starts
 doing field work.
@@ -2098,26 +2098,26 @@ It lowers these proven shapes:
 - direct `yield* check(someEither())` steps in `validate`
 - direct `yield someEither` attempts in `firstOf` and `collect`
 
-On a local `bun run bench:quick:node`-style run, the transform shook out roughly
-like this. The exact numbers will drift with hardware, runtime, warmup, and the
-JIT's morning mood, but the shape is the useful part:
+On a local Node 26.2.0 `bun run bench:quick:node` run, the transform shook out
+roughly like this. The exact numbers will drift with hardware, runtime, warmup,
+and the JIT's morning mood, but the shape is the useful part:
 
-| Shape                                           | Rough win |
-| ----------------------------------------------- | --------- |
-| `either`: single sync `yield*` success          | `~31x`    |
-| `either`: two sync `yield*` successes           | `~8.5x`   |
-| `either`: sync `Left` short-circuit             | `~13x`    |
-| `either`: two async `yield* await` successes    | `~5.9x`   |
-| `either`: async `Left` short-circuit            | `~7.3x`   |
-| `validate`: two checks                          | `~10x`    |
-| `firstOf`: three attempts                       | `~10-11x` |
-| Fused guards: success                           | `~15x`    |
-| Fused guards: `Left`                            | `~28x`    |
-| `raise.capture`: cached `Right`                 | `~20x`    |
-| `raise.capture`: `Left` then fallback           | `~19x`    |
-| Stream: `yield* await json(body)`               | `~2.6x`   |
-| Stream: `yield* next` in `ndjson` / `sse` loops | `~1.2x`   |
-| `collect`: many yielded items                   | `~1x`     |
+| Shape                                           | Rough win   |
+| ----------------------------------------------- | ----------- |
+| `either`: single sync `yield*` success          | `~11x`      |
+| `either`: two sync `yield*` successes           | `~19x`      |
+| `either`: sync `Left` short-circuit             | `~19x`      |
+| `either`: two async `yield* await` successes    | `~6.5x`     |
+| `either`: async `Left` short-circuit            | `~9.7x`     |
+| `validate`: two checks                          | `~9-10x`    |
+| `firstOf`: three attempts                       | `~8-17x`    |
+| Fused guards: success                           | `~19x`      |
+| Fused guards: `Left`                            | `~5.8x`     |
+| `raise.capture`: cached `Right`                 | `~34x`      |
+| `raise.capture`: `Left` then fallback           | `~17x`      |
+| Stream: `yield* await json(body)`               | `~2.4x`     |
+| Stream: `yield* next` in `ndjson` / `sse` loops | `~1.3-1.4x` |
+| `collect`: many yielded items                   | `~1.0-1.1x` |
 
 Tiny flows win hardest because the generator driver is most of the work. Once
 you are parsing JSON, walking many items, or calling real I/O, the plugin still
@@ -2289,22 +2289,19 @@ The current benchmark suite compares common `either` flows against
 scoped concurrent first success, collection, plugin-transformed scenarios, and
 stream helpers against vanilla async-iteration code.
 
-For a rough overhead map, `src/overhead.bench.ts` compares the same core flows
-four ways. These numbers are from a local quick run and are normalized per row
-to vanilla `try` / `throw` / `catch` as `1x`. Higher is faster:
+Runtime-only `yeet` and `better-result` are close enough that the shape of the
+work matters. Yeet currently has a small lead on multi-step synchronous flows
+and short-circuits; `better-result` leads on the plain async success path. These
+are rough throughput multipliers, with the faster implementation shown in each
+row:
 
-| Scenario                     | Vanilla exceptions | `better-result` | `yeet`  | `yeet` lowered |
-| ---------------------------- | ------------------ | --------------- | ------- | -------------- |
-| Sync two successes           | `1x`               | `0.08x`         | `0.09x` | `0.48x`        |
-| Sync failure / short-circuit | `1x`               | `2.4x`          | `2.6x`  | `19x`          |
-| Async two successes          | `1x`               | `0.10x`         | `0.13x` | `0.60x`        |
-| Complex checkout success     | `1x`               | `0.08x`         | `0.09x` | `0.59x`        |
-
-That is the honest bargain. On tiny success paths, plain JavaScript with
-exceptions is the low-overhead baseline. On failure paths, exceptions pay for
-their dramatic exit, while `Either` is just data walking through a door. Turn on
-the unplugin and yeet gets much closer to the baseline on happy paths while
-keeping the data-shaped exit on sad ones.
+| Scenario                      | Result                            |
+| ----------------------------- | --------------------------------- |
+| Two sync successes            | `yeet` faster by `1.05x`          |
+| Sync failure / short-circuit  | `yeet` faster by `1.14x`          |
+| Complex checkout success      | `yeet` faster by `1.14x`          |
+| Async failure / short-circuit | `yeet` faster by `1.15x`          |
+| Async success                 | `better-result` faster by `1.24x` |
 
 Stream helpers have a separate row because they do more than shuttle control
 flow. This compares a tiny hand-written parser against yeet's NDJSON helper, and
@@ -2312,7 +2309,7 @@ then against the same yeet code after the build-time transform:
 
 | Scenario              | Manual parser | `yeet` stream | `yeet` stream lowered |
 | --------------------- | ------------- | ------------- | --------------------- |
-| NDJSON stream success | `1x`          | `0.49x`       | `0.69x`               |
+| NDJSON stream success | `1x`          | `0.46x`       | `0.66x`               |
 
 The stream helper still does real parsing, decoding, bounds, cleanup, and
 error-shaping work. The transform removes generator consumption overhead; it

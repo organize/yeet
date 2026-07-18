@@ -46,28 +46,28 @@ type SerializedEitherCandidate = {
 }
 
 class LeftIterator<E> implements Iterator<Left<E>, never, unknown> {
-  private left: Left<E> | undefined
+  #left: Left<E> | undefined
 
   constructor(left: Left<E>) {
-    this.left = left
+    this.#left = left
   }
 
   next(): IteratorResult<Left<E>, never> {
-    const left = this.left
+    const left = this.#left
     if (left === undefined) {
       throw new Error('Unreachable: Left yielded but generator continued')
     }
-    this.left = undefined
+    this.#left = undefined
     return { value: left, done: false }
   }
 
   return(value: never): IteratorReturnResult<never> {
-    this.left = undefined
+    this.#left = undefined
     return { value, done: true }
   }
 
   throw(e: unknown): IteratorResult<Left<E>, never> {
-    this.left = undefined
+    this.#left = undefined
     throw e
   }
 
@@ -126,8 +126,12 @@ export class Right<A> {
   }
 
   // A Right never yields, so it can be its own completed iterator.
+  get done(): true {
+    return true
+  }
+
   next(): IteratorReturnResult<A> {
-    return { value: this.value, done: true }
+    return this
   }
 
   get [Symbol.toStringTag]() {
@@ -221,23 +225,6 @@ export function isLeft<E, A>(value: Either<E, A>): value is Left<E> {
  */
 export function isRight<E, A>(value: Either<E, A>): value is Right<A> {
   return value._tag === 'Right'
-}
-
-/**
- * Narrows an arbitrary return value `T` to `Extract<T, Left<any>>`.
- *
- * Used by strategy `finish` handlers to detect when a generator returns a
- * `Left` directly rather than yielding it. This is necessary because a generator's
- * return type is not constrained to `Either`.
- *
- * @param value - The value to test.
- */
-export function isLeftReturn<T>(value: T): value is Extract<T, Left<any>> {
-  return (
-    value !== null &&
-    typeof value === 'object' &&
-    (value as { readonly _tag?: unknown })._tag === 'Left'
-  )
 }
 
 function toSerializedPayload<T>(

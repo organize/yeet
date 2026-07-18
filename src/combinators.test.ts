@@ -349,6 +349,22 @@ describe('either (async)', () => {
 
     expectRight(result, 'from-thenable')
   })
+
+  it('raise(thenable) captures a throwing then getter', async () => {
+    const cause = new Error('Broken then getter')
+    // oxlint-disable-next-line unicorn/no-thenable
+    const thenable = Object.defineProperty({}, 'then', {
+      get() {
+        throw cause
+      },
+    }) as PromiseLike<never>
+
+    const result = await either(async function* (raise) {
+      return yield* await raise(thenable)
+    })
+
+    expectLeft(result, { _tag: 'Rejected', cause })
+  })
 })
 
 describe('either scoped signal', () => {
@@ -2952,6 +2968,19 @@ describe('raise.capture', () => {
 
     const result = await raise.capture(thenable)
     expect(result).toBe(outcome)
+  })
+
+  it('captures a throwing then getter', async () => {
+    const cause = new Error('Broken then getter')
+    // oxlint-disable-next-line unicorn/no-thenable
+    const thenable = Object.defineProperty({}, 'then', {
+      get() {
+        throw cause
+      },
+    }) as PromiseLike<never>
+
+    const result = await raise.capture(thenable)
+    expectLeft(result, { _tag: 'Rejected', cause })
   })
 
   it('allows a captured outcome to be propagated deliberately', async () => {

@@ -119,14 +119,26 @@ type StopState = {
 }
 type CloseMode = 'cancel' | 'release'
 type ReturnReason = { value: unknown }
+type MapLinesBehavior = { readonly continueOnMappedLeft?: boolean }
 type ReleasableAsyncIterator<T> = AsyncIterator<T> & {
   return(reason?: unknown): Promise<IteratorReturnResult<undefined>>
   release(): void
 }
 
 const EMPTY_BYTES = new Uint8Array(0)
+const RIGHT_VOID = right(undefined) as Right<void>
 const DEFAULT_EVENT = 'message'
 const STREAM_DECODE_OPTIONS = { stream: true }
+const NOOP = (): void => {}
+const NO_STOP: StopState = {
+  promise: undefined,
+  initial: undefined,
+  cleanup: NOOP,
+}
+const STOP_ON_MAPPED_LEFT: MapLinesBehavior = {}
+const CONTINUE_ON_MAPPED_LEFT: MapLinesBehavior = {
+  continueOnMappedLeft: true,
+}
 
 export async function bytes(
   source: ByteSource,
@@ -149,7 +161,7 @@ export async function bytes(
   const parts: Uint8Array[] = []
   let total = 0
   const iterator = byteIterator(source)
-  if (iterator._tag === 'Left') return iterator
+  if (iterator instanceof Left) return iterator
 
   let close: 'cancel' | 'release' = 'release'
   let closeReason: unknown
@@ -159,7 +171,7 @@ export async function bytes(
     while (true) {
       let result: IteratorResult<unknown>
       if (canStop) {
-        const next = await nextOrStop(iterator.value, stop)
+        const next = await nextOrStop(iterator, stop)
         if (next.done) {
           close = 'cancel'
           closeReason = cancelReasonFromError(next.error)
@@ -167,7 +179,7 @@ export async function bytes(
         }
         result = next.result
       } else {
-        result = await iterator.value.next()
+        result = await iterator.next()
       }
 
       if (result.done === true) return right(concatBytes(parts, total))
@@ -196,7 +208,7 @@ export async function bytes(
     return left(error)
   } finally {
     stop.cleanup()
-    await closeIterator(iterator.value, close, closeReason)
+    await closeIterator(iterator, close, closeReason)
   }
 }
 
@@ -222,8 +234,10 @@ export function chunks(
   source: ByteSource,
   options: ByteOptions = {},
 ): AsyncGenerator<Either<Aborted | StreamError, Uint8Array>, void, unknown> {
-  return withReturnReason((returnReason) =>
+  const returnReason: ReturnReason = { value: undefined }
+  return withReturnReason(
     chunksGenerator(source, options, returnReason),
+    returnReason,
   )
 }
 
@@ -252,7 +266,7 @@ async function* chunksGenerator(
   }
 
   const iterator = byteIterator(source)
-  if (iterator._tag === 'Left') {
+  if (iterator instanceof Left) {
     yield iterator
     return
   }
@@ -267,7 +281,7 @@ async function* chunksGenerator(
     while (true) {
       let result: IteratorResult<unknown>
       if (canStop) {
-        const next = await nextOrStop(iterator.value, stop)
+        const next = await nextOrStop(iterator, stop)
         if (next.done) {
           close = 'cancel'
           closeReason = cancelReasonFromError(next.error)
@@ -276,7 +290,7 @@ async function* chunksGenerator(
         }
         result = next.result
       } else {
-        result = await iterator.value.next()
+        result = await iterator.next()
       }
 
       if (result.done === true) {
@@ -314,7 +328,7 @@ async function* chunksGenerator(
       close = 'cancel'
       closeReason = returnReason.value
     }
-    await closeIterator(iterator.value, close, closeReason)
+    await closeIterator(iterator, close, closeReason)
   }
 }
 
@@ -357,7 +371,7 @@ export async function consume<T, E, E2 = never>(
         result = await iterator.next()
       }
 
-      if (result.done === true) return right(undefined)
+      if (result.done === true) return RIGHT_VOID
 
       const item = result.value
       if (item instanceof Left) {
@@ -474,7 +488,7 @@ export function lines(
   source: ByteSource,
   options: LineOptions = {},
 ): AsyncGenerator<Either<Aborted | StreamError, string>, void, unknown> {
-  return mapLines(source, options, (line) => right(line))
+  return mapLines(source, options, rightLine)
 }
 
 export function ndjson(
@@ -484,17 +498,9 @@ export function ndjson(
   return mapLines(
     source,
     options,
-    (line) => {
-      if (line.length === 0) return undefined
-
-      try {
-        return right(JSON.parse(line) as unknown)
-      } catch (cause) {
-        return left(parseError('ndjson', cause))
-      }
-    },
+    parseNdjsonLine,
     undefined,
-    { continueOnMappedLeft: true },
+    CONTINUE_ON_MAPPED_LEFT,
   )
 }
 
@@ -579,10 +585,12 @@ function mapLines<A>(
   options: LineOptions,
   map: (line: string) => Either<StreamError, A> | undefined,
   finish?: () => Either<StreamError, A> | undefined,
-  behavior: { readonly continueOnMappedLeft?: boolean } = {},
+  behavior: MapLinesBehavior = STOP_ON_MAPPED_LEFT,
 ): AsyncGenerator<Either<Aborted | StreamError, A>, void, unknown> {
-  return withReturnReason((returnReason) =>
+  const returnReason: ReturnReason = { value: undefined }
+  return withReturnReason(
     mapLinesGenerator(source, options, map, finish, behavior, returnReason),
+    returnReason,
   )
 }
 
@@ -591,7 +599,7 @@ async function* mapLinesGenerator<A>(
   options: LineOptions,
   map: (line: string) => Either<StreamError, A> | undefined,
   finish: (() => Either<StreamError, A> | undefined) | undefined,
-  behavior: { readonly continueOnMappedLeft?: boolean },
+  behavior: MapLinesBehavior,
   returnReason: ReturnReason,
 ): AsyncGenerator<Either<Aborted | StreamError, A>, void, unknown> {
   const stop = createStopState(options)
@@ -604,8 +612,8 @@ async function* mapLinesGenerator<A>(
   const iterator =
     immediate === undefined
       ? byteIterator(source)
-      : right(singleChunkIterator(immediate))
-  if (iterator._tag === 'Left') {
+      : singleChunkIterator(immediate)
+  if (iterator instanceof Left) {
     yield iterator
     return
   }
@@ -625,7 +633,7 @@ async function* mapLinesGenerator<A>(
     while (true) {
       let result: IteratorResult<unknown>
       if (canStop) {
-        const next = await nextOrStop(iterator.value, stop)
+        const next = await nextOrStop(iterator, stop)
         if (next.done) {
           close = 'cancel'
           closeReason = cancelReasonFromError(next.error)
@@ -634,7 +642,7 @@ async function* mapLinesGenerator<A>(
         }
         result = next.result
       } else {
-        result = await iterator.value.next()
+        result = await iterator.next()
       }
 
       if (result.done === true) break
@@ -686,16 +694,16 @@ async function* mapLinesGenerator<A>(
       }
 
       const decoded = decodeUtf8Chunk(decoder, chunk)
-      if (decoded._tag === 'Left') {
+      if (decoded instanceof Left) {
         close = 'cancel'
         closeReason = decoded.error
         yield decoded
         return
       }
 
-      if (decoded.value.length === 0) continue
+      if (decoded.length === 0) continue
 
-      carry += decoded.value
+      carry += decoded
       let start = 0
       let newline = carry.indexOf('\n')
       while (newline !== -1) {
@@ -721,13 +729,13 @@ async function* mapLinesGenerator<A>(
     }
 
     const tail = flushUtf8Decoder(decoder)
-    if (tail._tag === 'Left') {
+    if (tail instanceof Left) {
       close = 'cancel'
       closeReason = tail.error
       yield tail
       return
     }
-    if (tail.value.length > 0) carry += tail.value
+    if (tail.length > 0) carry += tail
 
     if (carry.length > 0) {
       const mapped = map(stripTrailingCrString(carry))
@@ -770,7 +778,7 @@ async function* mapLinesGenerator<A>(
       close = 'cancel'
       closeReason = yieldedError ?? returnReason.value
     }
-    await closeIterator(iterator.value, close, closeReason)
+    await closeIterator(iterator, close, closeReason)
   }
 }
 
@@ -803,17 +811,17 @@ function decodeUtf8With(
 function decodeUtf8Chunk(
   decoder: TextDecoder,
   input: Uint8Array,
-): Either<DecodeError, string> {
+): string | Left<DecodeError> {
   try {
-    return right(decoder.decode(input, STREAM_DECODE_OPTIONS))
+    return decoder.decode(input, STREAM_DECODE_OPTIONS)
   } catch (cause) {
     return left(decodeError('utf-8', cause))
   }
 }
 
-function flushUtf8Decoder(decoder: TextDecoder): Either<DecodeError, string> {
+function flushUtf8Decoder(decoder: TextDecoder): string | Left<DecodeError> {
   try {
-    return right(decoder.decode())
+    return decoder.decode()
   } catch (cause) {
     return left(decodeError('utf-8', cause))
   }
@@ -827,6 +835,22 @@ function parseJson(
     return right(JSON.parse(input) as unknown)
   } catch (cause) {
     return left(parseError(format, cause))
+  }
+}
+
+function rightLine(line: string): Right<string> {
+  return right(line)
+}
+
+function parseNdjsonLine(
+  line: string,
+): Either<ParseError, unknown> | undefined {
+  if (line.length === 0) return undefined
+
+  try {
+    return right(JSON.parse(line) as unknown)
+  } catch (cause) {
+    return left(parseError('ndjson', cause))
   }
 }
 
@@ -860,22 +884,22 @@ function immediateBytes(source: ByteSource): Uint8Array | undefined {
 
 function byteIterator(
   source: ByteSource,
-): Either<StreamError, AsyncIterator<unknown>> {
+): Left<StreamError> | AsyncIterator<unknown> {
   if (isResponse(source)) {
     return source.body === null
-      ? right(singleChunkIterator(EMPTY_BYTES))
-      : right(readableIterator(source.body))
+      ? singleChunkIterator(EMPTY_BYTES)
+      : readableIterator(source.body)
   }
 
   if (isRequest(source)) {
     return source.body === null
-      ? right(singleChunkIterator(EMPTY_BYTES))
-      : right(readableIterator(source.body))
+      ? singleChunkIterator(EMPTY_BYTES)
+      : readableIterator(source.body)
   }
 
-  if (isBlob(source)) return right(readableIterator(source.stream()))
-  if (isReadableStream(source)) return right(readableIterator(source))
-  if (isAsyncIterable(source)) return right(source[Symbol.asyncIterator]())
+  if (isBlob(source)) return readableIterator(source.stream())
+  if (isReadableStream(source)) return readableIterator(source)
+  if (isAsyncIterable(source)) return source[Symbol.asyncIterator]()
 
   return left(invalidChunk(source))
 }
@@ -919,15 +943,15 @@ function readableIterator<T>(
 }
 
 function withReturnReason<Yield, Return, Next>(
-  create: (returnReason: ReturnReason) => AsyncGenerator<Yield, Return, Next>,
+  generator: AsyncGenerator<Yield, Return, Next>,
+  returnReason: ReturnReason,
 ): AsyncGenerator<Yield, Return, Next> {
-  const returnReason: ReturnReason = { value: undefined }
-  const generator = create(returnReason)
-  const originalReturn = generator.return.bind(generator)
+  // oxlint-disable-next-line typescript/unbound-method
+  const originalReturn = generator.return
 
   generator.return = async (value) => {
     returnReason.value = value
-    return await originalReturn(value)
+    return await originalReturn.call(generator, value)
   }
 
   return generator
@@ -962,7 +986,7 @@ function isPromiseLike<T>(value: T | PromiseLike<T>): value is PromiseLike<T> {
 
 function createStopState(options: StreamOptions): StopState {
   if (options.signal === undefined && options.error === undefined) {
-    return { promise: undefined, initial: undefined, cleanup: () => {} }
+    return NO_STOP
   }
 
   if (options.signal?.aborted) {
@@ -970,7 +994,7 @@ function createStopState(options: StreamOptions): StopState {
     return {
       promise: Promise.resolve(error),
       initial: error,
-      cleanup: () => {},
+      cleanup: NOOP,
     }
   }
 
@@ -1011,19 +1035,10 @@ async function nextOrStop<T>(
     : { done: false, result }
 }
 
-function isStopError(value: unknown): value is Aborted | StreamError {
-  return (
-    value !== null &&
-    typeof value === 'object' &&
-    typeof (value as { readonly _tag?: unknown })._tag === 'string' &&
-    ((value as { readonly _tag: string })._tag === 'Aborted' ||
-      (value as { readonly _tag: string })._tag.startsWith('Stream') ||
-      (value as { readonly _tag: string })._tag === 'TextTooLarge' ||
-      (value as { readonly _tag: string })._tag === 'LineTooLarge' ||
-      (value as { readonly _tag: string })._tag === 'InvalidChunk' ||
-      (value as { readonly _tag: string })._tag === 'DecodeError' ||
-      (value as { readonly _tag: string })._tag === 'ParseError')
-  )
+function isStopError<T>(
+  value: IteratorResult<T> | Aborted | StreamError,
+): value is Aborted | StreamError {
+  return !('done' in value)
 }
 
 async function closeIterator<T>(

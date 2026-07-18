@@ -169,11 +169,11 @@ function raiseImpl(x: unknown): Promise<Either<Rejected, unknown>> | Left<any> {
     try {
       then = (x as { readonly then?: unknown }).then
     } catch {
-      return Promise.try(() => x).then(right, toRejectedLeft)
+      return Promise.resolve(x).then(right, toRejectedLeft)
     }
 
     if (typeof then === 'function') {
-      return Promise.try(() => x).then(right, toRejectedLeft)
+      return Promise.resolve(x).then(right, toRejectedLeft)
     }
   }
 
@@ -224,7 +224,7 @@ const capture: Capture = ((input: unknown) => {
       (typeof value === 'object' || typeof value === 'function') &&
       typeof (value as { readonly then?: unknown }).then === 'function'
     ) {
-      return Promise.try(() => value).then(finishCaptured, toRejectedLeft)
+      return Promise.resolve(value).then(finishCaptured, toRejectedLeft)
     }
 
     return right(value)

@@ -5,7 +5,6 @@ import {
   right,
   isLeft,
   isRight,
-  isLeftReturn,
   fromJSON,
   isSerializedEither,
 } from './either.ts'
@@ -186,6 +185,15 @@ describe('left / right constructors', () => {
     expect(v._tag).toBe('Right')
     expect(v.value).toBe(42)
   })
+
+  it('right is its own completed iterator result without changing its own shape', () => {
+    const value = right(42)
+    const iterator = value[Symbol.iterator]()
+
+    expect(iterator.next()).toBe(value)
+    expect(value.done).toBe(true)
+    expect(Object.keys(value)).toEqual(['_tag', 'value'])
+  })
 })
 
 describe('isLeft / isRight', () => {
@@ -197,22 +205,6 @@ describe('isLeft / isRight', () => {
   it('isRight narrows correctly', () => {
     expect(isRight(right(1))).toBe(true)
     expect(isRight(left('e'))).toBe(false)
-  })
-})
-
-describe('isLeftReturn', () => {
-  it('returns true for a Left', () => {
-    expect(isLeftReturn(left('e'))).toBe(true)
-  })
-
-  it('returns false for a Right', () => {
-    expect(isLeftReturn(right(1))).toBe(false)
-  })
-
-  it('returns false for non-Either objects', () => {
-    expect(isLeftReturn(null)).toBe(false)
-    expect(isLeftReturn({ _tag: 'Right' })).toBe(false)
-    expect(isLeftReturn('string')).toBe(false)
   })
 })
 

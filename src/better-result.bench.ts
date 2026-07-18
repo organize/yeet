@@ -1,6 +1,6 @@
 import { Result } from 'better-result'
 /**
- * Head-to-head benchmarks: yeet vs better-result@2.7.0
+ * Head-to-head benchmarks: yeet vs the installed better-result version
  *
  * Mirrors the either scenarios from index.bench.ts as closely as the two
  * APIs allow:
@@ -424,7 +424,7 @@ describe('either — single yield, success', () => {
   bench(
     'yeet',
     () => {
-      either(function* (_raise) {
+      either(function* () {
         const user = yield* getUser('1')
         return user
       })
@@ -476,7 +476,7 @@ describe('either — single yield, short-circuit', () => {
   bench(
     'yeet',
     () => {
-      either(function* (_raise) {
+      either(function* () {
         const user = yield* getUser('not-found')
         return user
       })
@@ -559,7 +559,7 @@ describe('either async — single yield, short-circuit', () => {
   bench(
     'yeet',
     async () => {
-      await either(async function* (_raise) {
+      await either(async function* () {
         const user = yield* await fetchUser('not-found')
         return user
       })
