@@ -394,6 +394,21 @@ describe('yeet unplugin transform', () => {
     }
   })
 
+  it('keeps scoped resource acquisition on the runtime path', () => {
+    const source = `
+      import { either } from '@big-time/yeet'
+      either(async function* ({ signal }) {
+        const resource = yield* signal.acquire(
+          () => ({ value: 42 }),
+          () => {},
+        )
+        return resource.value
+      })
+    `
+
+    expect(transformYeet(source, 'fixture.ts')).toBeNull()
+  })
+
   it('simplifies only statically primitive final returns', () => {
     const source = `
       import { either, right } from '@big-time/yeet'

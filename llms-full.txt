@@ -1,6 +1,6 @@
 # yeet
 
-> A tiny (~5.0 kB gzipped core; stream helpers on a separate ~3.1 kB subpath), zero-dependency `Either` / `Result` library for TypeScript. It models success and failure as ordinary values (`Right<A>` and `Left<E>`) and uses generator-based do-notation instead of a method-chaining API. You write normal control flow — `if`, `for`, early `return` — and TypeScript infers the error union from what you yield and raise. An optional build-time transform lowers the generators to plain branches for zero runtime overhead.
+> A tiny (~5.7 kB gzipped core; stream helpers on a separate ~3.1 kB subpath), zero-dependency `Either` / `Result` library for TypeScript. It models success and failure as ordinary values (`Right<A>` and `Left<E>`) and uses generator-based do-notation instead of a method-chaining API. You write normal control flow — `if`, `for`, early `return` — and TypeScript infers the error union from what you yield and raise. An optional build-time transform lowers the generators to plain branches for zero runtime overhead.
 
 `yeet` deliberately has no `map` / `flatMap` / `andThen` / `pipe` surface. The happy path reads top-to-bottom; errors flow through the type system. Package name on npm is `@big-time/yeet`. It is ESM-only and ships TypeScript declarations.
 
@@ -124,6 +124,11 @@ const result = await either(signal, async function* ({ signal }) {
 
 ```ts
 type ScopeSignal = AbortSignal & {
+  acquire<E, A>(
+    factory: (signal: ScopeSignal) =>
+      A | Either<E, A> | PromiseLike<A | Either<E, A>>,
+    release: (resource: A) => void | PromiseLike<void>,
+  ): AsyncIterableIterator<Left<ExitError<E>>, A>
   fork<E, A>(
     task: (signal: ScopeSignal) => Either<E, A> | PromiseLike<Either<E, A>>,
   ): Promise<Exit<E, A>>
@@ -180,6 +185,30 @@ For clean inferred error unions, `yield* await` the fork promises you care
 about. Runtime failures from detached forks still cancel the scope, but
 TypeScript cannot infer an error type from a promise that is started and never
 referenced.
+
+Use `yield* signal.acquire(factory, release)` for resources owned by the
+remaining async `either` scope. The factory is lazy, receives the owning
+`ScopeSignal`, and may return a raw value, `Either`, promise, or promised
+`Either`. It is factory-only: do not pass an already-started promise or resource.
+The release callback is optional when the value implements `Disposable` or
+`AsyncDisposable`.
+
+```ts
+const result = await either(async function* ({ signal }) {
+  const conn = yield* signal.acquire(
+    (signal) => pool.connect({ signal }),
+    (conn) => conn.release(),
+  )
+  return yield* await loadUser(conn, id)
+})
+// Promise<Either<Aborted | Rejected | ConnectError | UserError, User>>
+```
+
+Yeet aborts and awaits children before releasing parent resources in LIFO
+order. Cleanup failure after success becomes `Left<Rejected>`; multiple cleanup
+failures use `Suppressed`. An existing domain failure or `Aborted` remains
+primary. Use native `using` / `await using` for lexical lifetime. Scoped
+acquisition remains on the unplugin runtime path.
 
 Prefer `yield* await signal.forkAll([...])` for batches: it starts all child tasks,
 preserves tuple order, and cancels siblings on first failure. Prefer
@@ -488,7 +517,7 @@ A call is lowered only when it is a direct `either(function* () { ... })` litera
 - Use `return raise(error)` for typed early exit. `raise` is the generator's first parameter. `raise('X')` alone (without `return`) just builds a `Left`; you usually `return` it.
 - Don't annotate the error type — it is inferred. Use `as const` on string-literal errors when you want a narrow literal type: `return raise('Inactive' as const)`.
 - Async: `const x = yield* await fetchThing()` where `fetchThing` returns `Promise<Either>`. Wrap raw promises and throwing starts with `raise(...)` so rejections/throws become `Left<Rejected>`.
-- Scoped child work: inside async `either`, destructure `{ signal }` and use `signal.fork((signal) => task(signal))`, `yield* await signal.forkAll([...])`, `yield* await signal.forkFirst([...])`, `yield* await signal.forkRace([...])`, or `signal.forkEach(items, { concurrency }, task)`; these keep child work under the current generator. `forkFirst` waits for the first `Right`; `forkRace` takes the first outcome; `forkEach` yields bounded completions in settlement order.
+- Scoped resources and child work: inside async `either`, use `yield* signal.acquire(factory, release?)`, `signal.fork((signal) => task(signal))`, `yield* await signal.forkAll([...])`, `yield* await signal.forkFirst([...])`, `yield* await signal.forkRace([...])`, or `signal.forkEach(items, { concurrency }, task)`. `acquire` owns resources for the scope; the fork helpers own child work.
 - Streams: import helpers from `@big-time/yeet/stream`, not the root. Use `collectText` / `consume` for hot text-delta drains, and `for await (const next of ndjson(...) | sse(...)) { const item = yield* next }` for structured streams.
 - Optimizer: stream helpers in non-abortable `either(async function* ...)` compose with the transform (`yield* await json(...)`, `yield* await collectText(...)`, and `yield* next` where `next` is a `const` item from yeet `ndjson` / `sse` / `lines` / `chunks`). Abortable `either(signal, ...)` stays on the runtime driver.
 - Check results with `isLeft` / `isRight` or `result._tag === 'Left'`.

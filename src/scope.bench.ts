@@ -11,6 +11,7 @@ type Candidate = (
 
 const BENCH_BATCH = readPositiveInt('SCOPE_BENCH_BATCH', 16)
 const FORK_EACH_BENCH_BATCH = readPositiveInt('FORK_EACH_BENCH_BATCH', 8)
+const RESOURCE_BENCH_BATCH = readPositiveInt('RESOURCE_BENCH_BATCH', 16)
 const sink = { value: undefined as unknown }
 
 const immediateSuccess = [
@@ -126,6 +127,63 @@ describe('scoped completion stream: early-break cancellation', () => {
   benchmarkEachPair(earlyBreakEach)
 })
 
+type ResourceTiming = 'sync' | 'immediate' | 'pending'
+type ResourceScenario = {
+  readonly count: number
+  readonly timing: ResourceTiming
+  readonly fail: boolean
+}
+
+for (const scenario of [
+  { count: 1, timing: 'sync', fail: false },
+  { count: 1, timing: 'immediate', fail: false },
+  { count: 1, timing: 'pending', fail: false },
+  { count: 8, timing: 'sync', fail: false },
+  { count: 8, timing: 'sync', fail: true },
+] as const satisfies readonly ResourceScenario[]) {
+  describe(`scoped resources: ${scenario.count} ${scenario.timing} ${scenario.fail ? 'Left' : 'success'}`, () =>
+    benchmarkResourcePair(scenario))
+}
+
+describe('scoped resources: native async disposable', () => {
+  bench(
+    'native await using',
+    async () => consumeResourceBatch(nativeUsingResource),
+    BENCH_OPTS,
+  )
+  bench(
+    'yeet signal.acquire native disposable',
+    async () => consumeResourceBatch(yeetNativeResource),
+    BENCH_OPTS,
+  )
+})
+
+describe('scoped resources: abort during acquisition', () => {
+  bench(
+    'manual AsyncDisposableStack + abort check',
+    async () => consumeResourceBatch(manualAbortDuringAcquire),
+    BENCH_OPTS,
+  )
+  bench(
+    'yeet signal.acquire',
+    async () => consumeResourceBatch(yeetAbortDuringAcquire),
+    BENCH_OPTS,
+  )
+})
+
+describe('scoped resources: unused paths', () => {
+  bench(
+    'async either without signal',
+    async () => consumeResourceBatch(yeetWithoutSignal),
+    BENCH_OPTS,
+  )
+  bench(
+    'async either with signal, no acquire',
+    async () => consumeResourceBatch(yeetSignalOnly),
+    BENCH_OPTS,
+  )
+})
+
 function benchmarkPair(tasks: readonly Candidate[]): void {
   bench(
     'manual cancellation-aware first Right',
@@ -162,6 +220,31 @@ function benchmarkEachPair(scenario: EachScenario): void {
   )
 }
 
+function benchmarkResourcePair(scenario: ResourceScenario): void {
+  if (scenario.count === 1) {
+    bench(
+      'manual try/finally',
+      async () =>
+        await consumeResourceBatch(
+          async () => await manualSingleResource(scenario),
+        ),
+      BENCH_OPTS,
+    )
+  }
+  bench(
+    'manual AsyncDisposableStack',
+    async () =>
+      await consumeResourceBatch(async () => await manualResources(scenario)),
+    BENCH_OPTS,
+  )
+  bench(
+    'yeet signal.acquire',
+    async () =>
+      await consumeResourceBatch(async () => await yeetResources(scenario)),
+    BENCH_OPTS,
+  )
+}
+
 async function consumeBatch(
   run: (tasks: readonly Candidate[]) => Promise<Either<unknown, unknown>>,
   tasks: readonly Candidate[],
@@ -182,6 +265,129 @@ async function consumeEachBatch(
     value = await run(scenario)
   }
   sink.value = value
+}
+
+async function consumeResourceBatch(
+  run: () => Promise<Either<unknown, unknown>>,
+): Promise<void> {
+  let value: unknown
+  for (let batch = 0; batch < RESOURCE_BENCH_BATCH; batch++) value = await run()
+  sink.value = value
+}
+
+type BenchResource = { readonly index: number }
+
+async function manualSingleResource(
+  scenario: ResourceScenario,
+): Promise<Either<'Stop', number>> {
+  const resource = await openBenchResource(scenario.timing, 0)
+  try {
+    return scenario.fail ? left('Stop' as const) : right(1)
+  } finally {
+    releaseBenchResource(resource)
+  }
+}
+
+async function manualResources(
+  scenario: ResourceScenario,
+): Promise<Either<'Stop', number>> {
+  const stack = new AsyncDisposableStack()
+  try {
+    for (let index = 0; index < scenario.count; index++) {
+      const resource = await openBenchResource(scenario.timing, index)
+      stack.adopt(resource, releaseBenchResource)
+    }
+    return scenario.fail ? left('Stop' as const) : right(scenario.count)
+  } finally {
+    await stack.disposeAsync()
+  }
+}
+
+async function yeetResources(
+  scenario: ResourceScenario,
+): Promise<Either<unknown, number>> {
+  return await either(async function* ({ signal }) {
+    for (let index = 0; index < scenario.count; index++) {
+      yield* signal.acquire(
+        // Preserve the synchronous acquisition benchmark case.
+        // oxlint-disable-next-line typescript/promise-function-async
+        () => openBenchResource(scenario.timing, index),
+        releaseBenchResource,
+      )
+    }
+    return scenario.fail ? left('Stop' as const) : scenario.count
+  })
+}
+
+function openBenchResource(
+  timing: ResourceTiming,
+  index: number,
+): BenchResource | Promise<BenchResource> {
+  const resource = { index }
+  if (timing === 'sync') return resource
+  if (timing === 'immediate') return Promise.resolve(resource)
+  return Promise.resolve().then(() => resource)
+}
+
+function releaseBenchResource(_resource: BenchResource): void {}
+
+async function nativeUsingResource(): Promise<Either<never, number>> {
+  await using resource = {
+    index: 1,
+    async [Symbol.asyncDispose]() {},
+  }
+  return right(resource.index)
+}
+
+async function yeetNativeResource(): Promise<Either<unknown, number>> {
+  return await either(async function* ({ signal }) {
+    const resource = yield* signal.acquire(() => ({
+      index: 1,
+      async [Symbol.asyncDispose]() {},
+    }))
+    return resource.index
+  })
+}
+
+async function manualAbortDuringAcquire(): Promise<Either<unknown, never>> {
+  const controller = new AbortController()
+  const stack = new AsyncDisposableStack()
+  try {
+    const pending = Promise.resolve().then(() => ({ index: 1 }))
+    controller.abort('Stop')
+    stack.adopt(await pending, releaseBenchResource)
+    return left({ _tag: 'Aborted', reason: controller.signal.reason })
+  } finally {
+    await stack.disposeAsync()
+  }
+}
+
+async function yeetAbortDuringAcquire(): Promise<Either<unknown, unknown>> {
+  const controller = new AbortController()
+  return await either(controller.signal, async function* (_raise, signal) {
+    return yield* signal.acquire(async () => {
+      const pending = Promise.resolve().then(() => ({ index: 1 }))
+      controller.abort('Stop')
+      return await pending
+    }, releaseBenchResource)
+  })
+}
+
+async function yeetWithoutSignal(): Promise<Either<never, number>> {
+  // oxlint-disable-next-line require-yield
+  return await either(async function* () {
+    return 1
+  })
+}
+
+async function yeetSignalOnly(): Promise<Either<never, number>> {
+  return await either(
+    // oxlint-disable-next-line require-yield
+    async function* ({ signal }) {
+      void signal.aborted
+      return 1
+    },
+  )
 }
 
 async function yeetFirst(

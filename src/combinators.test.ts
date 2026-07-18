@@ -6,6 +6,7 @@ import {
   type ExitError,
   type ForkEachIterator,
   type Rejected,
+  type ScopeSignal,
   type ScopeTask,
   forkEachStopped,
   raise,
@@ -21,7 +22,7 @@ import {
   ensure,
   ensureNotNull,
 } from './combinators.ts'
-import { left, right, type Either } from './either.ts'
+import { left, right, type Either, type Left } from './either.ts'
 import { exitSchema, type StandardSchemaV1 } from './schema.ts'
 
 function expectLeft<E>(result: Either<E, unknown>, error: E) {
@@ -681,7 +682,7 @@ describe('either scoped signal', () => {
       ] as const)
     })
 
-    expectLeft(result, {
+    expectLeft(result as Either<unknown, unknown>, {
       _tag: 'Suppressed',
       error: { _tag: 'Rejected', cause: first },
       suppressed: [{ _tag: 'Rejected', cause: second }],
@@ -1698,6 +1699,598 @@ describe('either scoped signal', () => {
         return yield* right(1)
       }),
     ).toThrow('signal.forkEach() is only available in async either')
+  })
+})
+
+describe('signal.acquire', () => {
+  it('starts lazily, passes the owning signal, and returns the raw resource', async () => {
+    const events: string[] = []
+    let started = 0
+
+    const resultPromise = either(async function* ({ signal }) {
+      const acquisition = signal.acquire(
+        async (received) => {
+          started++
+          expect(received).toBe(signal)
+          return right({ id: 'conn' as const })
+        },
+        (resource) => {
+          events.push(`release ${resource.id}`)
+        },
+      )
+
+      expect(started).toBe(0)
+      const resource = yield* acquisition
+      expect(started).toBe(1)
+      events.push(`use ${resource.id}`)
+      return resource.id
+    })
+    const typed: Promise<Either<ExitError<never>, 'conn'>> = resultPromise
+
+    expect(typed).toBe(resultPromise)
+    expectRight(await resultPromise, 'conn')
+    expect(events).toEqual(['use conn', 'release conn'])
+  })
+
+  it('flattens Either failures and captures factory throws and rejections', async () => {
+    const domain = await either(async function* ({ signal }) {
+      return yield* signal.acquire(
+        () => left('OpenFailed' as const),
+        () => {},
+      )
+    })
+    const thrownCause = new Error('factory threw')
+    const thrown = await either(async function* ({ signal }) {
+      return yield* signal.acquire(
+        () => {
+          throw thrownCause
+        },
+        () => {},
+      )
+    })
+    const rejectedCause = new Error('factory rejected')
+    const rejectedResult = await either(async function* ({ signal }) {
+      return yield* signal.acquire(
+        async () => {
+          throw rejectedCause
+        },
+        () => {},
+      )
+    })
+
+    expectLeft(domain, 'OpenFailed')
+    expectLeft(thrown, { _tag: 'Rejected', cause: thrownCause })
+    expectLeft(rejectedResult, { _tag: 'Rejected', cause: rejectedCause })
+  })
+
+  it('supports safely destructured acquire methods', async () => {
+    const events: string[] = []
+
+    // oxlint-disable-next-line typescript/unbound-method
+    const result = await either(async function* ({ signal: { acquire } }) {
+      const resource = yield* acquire(
+        () => ({ name: 'destructured' as const }),
+        ({ name }) => {
+          events.push(`release ${name}`)
+        },
+      )
+      events.push(`use ${resource.name}`)
+      return resource.name
+    })
+
+    expectRight(result, 'destructured')
+    expect(events).toEqual(['use destructured', 'release destructured'])
+  })
+
+  it('uses native sync and async disposal protocols without a releaser', async () => {
+    const events: string[] = []
+
+    const result = await either(async function* ({ signal }) {
+      const sync = yield* signal.acquire(() => disposable('sync', events))
+      const asyncResource = yield* signal.acquire(() =>
+        asyncDisposable('async', events),
+      )
+      events.push(`use ${sync.name}`)
+      events.push(`use ${asyncResource.name}`)
+      return 'done' as const
+    })
+
+    expectRight(result, 'done')
+    expect(events).toEqual([
+      'use sync',
+      'use async',
+      'dispose async:start',
+      'dispose async:end',
+      'dispose sync',
+    ])
+  })
+
+  it('disposes custom resources exactly once in LIFO order on success and Left', async () => {
+    const events: string[] = []
+
+    const success = await either(async function* ({ signal }) {
+      yield* signal.acquire(
+        () => 'outer',
+        (name) => {
+          events.push(`success ${name}`)
+        },
+      )
+      yield* signal.acquire(
+        () => 'inner',
+        (name) => {
+          events.push(`success ${name}`)
+        },
+      )
+      return 'ok' as const
+    })
+
+    const failure = await either(async function* ({ signal }) {
+      yield* signal.acquire(
+        () => 'outer',
+        (name) => {
+          events.push(`failure ${name}`)
+        },
+      )
+      yield* signal.acquire(
+        () => 'inner',
+        (name) => {
+          events.push(`failure ${name}`)
+        },
+      )
+      return left('Stop' as const)
+    })
+
+    expectRight(success, 'ok')
+    expectLeft(failure, 'Stop')
+    expect(events).toEqual([
+      'success inner',
+      'success outer',
+      'failure inner',
+      'failure outer',
+    ])
+  })
+
+  it('turns cleanup failures into Rejected and Suppressed Exit data', async () => {
+    const outerError = new Error('outer release failed')
+    const innerError = new Error('inner release failed')
+
+    const one = await either(async function* ({ signal }) {
+      yield* signal.acquire(
+        () => 'resource',
+        () => {
+          throw outerError
+        },
+      )
+      return 'ok' as const
+    })
+
+    const several = await either(async function* ({ signal }) {
+      yield* signal.acquire(
+        () => 'outer',
+        () => {
+          throw outerError
+        },
+      )
+      yield* signal.acquire(
+        () => 'inner',
+        async () => {
+          await Promise.resolve()
+          throw innerError
+        },
+      )
+      return 'ok' as const
+    })
+
+    expectLeft(one, { _tag: 'Rejected', cause: outerError })
+    expectLeft(several, {
+      _tag: 'Suppressed',
+      error: { _tag: 'Rejected', cause: outerError },
+      suppressed: [{ _tag: 'Rejected', cause: innerError }],
+    })
+  })
+
+  it('keeps a domain Left primary when resource cleanup fails', async () => {
+    const releaseError = new Error('release failed')
+
+    const result = await either(async function* ({ signal }) {
+      yield* signal.acquire(
+        () => 'resource',
+        () => {
+          throw releaseError
+        },
+      )
+      return left('Stop' as const)
+    })
+
+    expectLeft(result as Either<unknown, unknown>, {
+      _tag: 'Suppressed',
+      error: 'Stop',
+      suppressed: [{ _tag: 'Rejected', cause: releaseError }],
+    })
+  })
+
+  it('uses native SuppressedError when the body and resource cleanup throw', async () => {
+    const bodyError = new Error('body failed')
+    const releaseError = new Error('release failed')
+
+    let thrown: unknown
+    try {
+      await either(async function* ({ signal }) {
+        yield* signal.acquire(
+          () => 'resource',
+          () => {
+            throw releaseError
+          },
+        )
+        throw bodyError
+      })
+    } catch (cause) {
+      thrown = cause
+    }
+
+    expectSuppressedError(thrown, releaseError, bodyError)
+  })
+
+  it('does not expose a resource that resolves after parent abort', async () => {
+    const controller = new AbortController()
+    const opened = deferred<string>()
+    const events: string[] = []
+    let acquisitionSignal: ScopeSignal | undefined
+
+    const resultPromise = either(
+      controller.signal,
+      async function* (_raise, signal) {
+        const resource = yield* signal.acquire(
+          async (received) => {
+            acquisitionSignal = received
+            return await opened.promise
+          },
+          (value) => {
+            events.push(`release ${value}`)
+          },
+        )
+        events.push(`use ${resource}`)
+        return resource
+      },
+    )
+
+    await flushAsyncWork()
+    expect(acquisitionSignal?.aborted).toBe(false)
+    controller.abort('Stop')
+    await flushAsyncWork()
+    expect(events).toEqual([])
+
+    opened.resolve('late')
+    const result = await resultPromise
+
+    expectLeft(result, { _tag: 'Aborted', reason: 'Stop' })
+    expect(events).toEqual(['release late'])
+  })
+
+  it('suppresses a late acquisition rejection beneath parent abort', async () => {
+    const controller = new AbortController()
+    const opened = deferred<string>()
+    const cause = new Error('late open failed')
+
+    const resultPromise = either(
+      controller.signal,
+      async function* (_raise, signal) {
+        return yield* signal.acquire(
+          async () => await opened.promise,
+          () => {},
+        )
+      },
+    )
+
+    await flushAsyncWork()
+    controller.abort('Stop')
+    opened.reject(cause)
+
+    expectLeft(await resultPromise, {
+      _tag: 'Suppressed',
+      error: { _tag: 'Aborted', reason: 'Stop' },
+      suppressed: [{ _tag: 'Rejected', cause }],
+    })
+  })
+
+  it('does not invoke an acquisition factory in an already-aborted scope', async () => {
+    const controller = new AbortController()
+    let started = false
+    controller.abort('AlreadyDone')
+
+    const result = await either(
+      controller.signal,
+      async function* (_raise, signal) {
+        return yield* signal.acquire(() => {
+          started = true
+          return disposable('never', [])
+        })
+      },
+    )
+
+    expectLeft(result, { _tag: 'Aborted', reason: 'AlreadyDone' })
+    expect(started).toBe(false)
+  })
+
+  it('cancels sibling work with an acquisition domain failure', async () => {
+    const started = deferred<void>()
+    const reasons: unknown[] = []
+
+    const result = await either(async function* ({ signal }) {
+      void signal.fork(async (child) => {
+        started.resolve()
+        const stopped = await abortAsLeft(child, 'ChildStopped' as const)
+        reasons.push(child.reason)
+        return stopped
+      })
+      await started.promise
+
+      return yield* signal.acquire(
+        () => left('OpenFailed' as const),
+        () => {},
+      )
+    })
+
+    expectLeft(result as Either<unknown, unknown>, 'OpenFailed')
+    expect(reasons).toEqual(['OpenFailed'])
+  })
+
+  it('awaits children before disposing parent resources', async () => {
+    const events: string[] = []
+    const started = deferred<void>()
+    let parentDisposed = false
+
+    const result = await either(async function* ({ signal }) {
+      yield* signal.acquire(
+        () => 'parent',
+        () => {
+          parentDisposed = true
+          events.push('release parent')
+        },
+      )
+      void signal.fork(async (child) => {
+        started.resolve()
+        const stopped = await abortAsLeft(child, 'ChildStopped' as const)
+        events.push(`child saw disposed=${parentDisposed}`)
+        return stopped
+      })
+      await started.promise
+      return 'done' as const
+    })
+
+    expectRight(result, 'done')
+    expect(events).toEqual(['child saw disposed=false', 'release parent'])
+  })
+
+  it('keeps nested scope resources independent', async () => {
+    const events: string[] = []
+
+    const result = await either(async function* ({ signal }) {
+      yield* signal.acquire(
+        () => 'parent',
+        (name) => {
+          events.push(`release ${name}`)
+        },
+      )
+
+      const child = yield* await signal.fork(
+        async (childSignal) =>
+          await either(childSignal, async function* (_raise, nested) {
+            const resource = yield* nested.acquire(
+              () => 'child',
+              (name) => {
+                events.push(`release ${name}`)
+              },
+            )
+            events.push(`use ${resource}`)
+            return resource
+          }),
+      )
+      events.push(`joined ${child}`)
+      return child
+    })
+
+    expectRight(result, 'child')
+    expect(events).toEqual([
+      'use child',
+      'release child',
+      'joined child',
+      'release parent',
+    ])
+  })
+
+  it('orders child cleanup failure before parent resource cleanup failure', async () => {
+    const childError = new Error('child cleanup failed')
+    const resourceError = new Error('resource cleanup failed')
+    const started = deferred<void>()
+
+    const result = await either(async function* ({ signal }) {
+      yield* signal.acquire(
+        () => 'parent',
+        () => {
+          throw resourceError
+        },
+      )
+      void signal.fork(async (child) => {
+        started.resolve()
+        return await rejectOnAbort(child, childError)
+      })
+      await started.promise
+      return 'done' as const
+    })
+
+    expectLeft(result, {
+      _tag: 'Suppressed',
+      error: { _tag: 'Rejected', cause: childError },
+      suppressed: [{ _tag: 'Rejected', cause: resourceError }],
+    })
+  })
+
+  it('suppresses resource cleanup beneath a throwing scoped child task', async () => {
+    const taskError = new Error('task failed')
+    const resourceError = new Error('child resource cleanup failed')
+
+    const result = await either(async function* ({ signal }) {
+      return yield* await signal.fork(async (child) => {
+        const acquired = child.acquire(
+          () => 'child resource',
+          () => {
+            throw resourceError
+          },
+        )
+        const step = await acquired.next()
+        expect(step).toEqual({ done: true, value: 'child resource' })
+        throw taskError
+      })
+    })
+
+    expectLeft(result, {
+      _tag: 'Suppressed',
+      error: { _tag: 'Rejected', cause: taskError },
+      suppressed: [{ _tag: 'Rejected', cause: resourceError }],
+    })
+  })
+
+  it('preserves root throws and detached child cleanup failures', async () => {
+    const bodyError = new Error('body failed')
+    const childError = new Error('child cleanup failed')
+    const started = deferred<void>()
+
+    let thrown: unknown
+    try {
+      // oxlint-disable-next-line require-yield
+      await either(async function* ({ signal }) {
+        void signal.fork(async (child) => {
+          started.resolve()
+          return await rejectOnAbort(child, childError)
+        })
+        await started.promise
+        throw bodyError
+      })
+    } catch (cause) {
+      thrown = cause
+    }
+
+    expectSuppressedError(thrown, childError, bodyError)
+  })
+
+  it('invokes the factory once under concurrent iterator consumption', async () => {
+    let calls = 0
+
+    const result = await either(
+      // oxlint-disable-next-line require-yield
+      async function* ({ signal }) {
+        const acquisition = signal.acquire(async () => {
+          calls++
+          await Promise.resolve()
+          return disposable('shared', [])
+        })
+        const [first, second] = await Promise.all([
+          acquisition.next(),
+          acquisition.next(),
+        ])
+
+        expect(first).toMatchObject({ done: true })
+        expect(second).toEqual({ done: true, value: undefined })
+        return calls
+      },
+    )
+
+    expectRight(result, 1)
+    expect(calls).toBe(1)
+  })
+
+  it('cannot resurrect an acquisition closed before its first step', async () => {
+    let calls = 0
+
+    const result = await either(
+      // oxlint-disable-next-line require-yield
+      async function* ({ signal }) {
+        const acquisition = signal.acquire(() => {
+          calls++
+          return disposable('never', [])
+        })
+
+        expect(await acquisition.return?.()).toEqual({
+          done: true,
+          value: undefined,
+        })
+        expect(await acquisition.next()).toEqual({
+          done: true,
+          value: undefined,
+        })
+        return 'closed' as const
+      },
+    )
+
+    expectRight(result, 'closed')
+    expect(calls).toBe(0)
+  })
+
+  it('returns Rejected for a non-disposable value without a releaser in JavaScript', async () => {
+    const result = await either(async function* ({ signal }) {
+      // oxlint-disable-next-line typescript/unbound-method
+      const acquire = signal.acquire as unknown as (
+        factory: () => object,
+      ) => AsyncIterableIterator<Left<Rejected>, object, unknown>
+      return yield* acquire(() => ({}))
+    })
+
+    expect(result._tag).toBe('Left')
+    if (result._tag !== 'Left') return
+    expect(result.error._tag).toBe('Rejected')
+    expect(result.error.cause).toBeInstanceOf(TypeError)
+  })
+
+  it('infers factory domain errors and requires cleanup for plain values', () => {
+    const typed = either(async function* ({ signal }) {
+      const resource = yield* signal.acquire(
+        async () =>
+          Math.random() > 0.5
+            ? left('OpenFailed' as const)
+            : right({ id: 'typed' as const }),
+        () => {},
+      )
+      return resource.id
+    })
+    const expected: Promise<Either<ExitError<'OpenFailed'>, 'typed'>> = typed
+
+    const invalid = async () =>
+      await either(async function* ({ signal }) {
+        // @ts-expect-error Plain resources require an explicit releaser.
+        return yield* signal.acquire(() => ({ id: 'plain' }))
+      })
+    const invalidSync = () =>
+      either(function* ({ signal }) {
+        // @ts-expect-error Acquisition effects are async-only.
+        return yield* signal.acquire(() => disposable('sync', []))
+      })
+
+    expect(expected).toBe(typed)
+    expect(typeof invalid).toBe('function')
+    expect(typeof invalidSync).toBe('function')
+  })
+
+  it('rejects invalid releasers before starting the factory', async () => {
+    let started = false
+
+    const resultPromise = either(async function* ({ signal }) {
+      // oxlint-disable-next-line typescript/unbound-method
+      const acquire = signal.acquire as unknown as (
+        factory: () => unknown,
+        release: unknown,
+      ) => AsyncIterableIterator<Left<never>, never, unknown>
+      yield* acquire(() => {
+        started = true
+        return {}
+      }, 42)
+      return 'unreachable'
+    })
+
+    await expect(resultPromise).rejects.toThrow(
+      'signal.acquire() release must be a function',
+    )
+    expect(started).toBe(false)
   })
 })
 

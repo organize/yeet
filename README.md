@@ -1,6 +1,6 @@
 # yeet
 
-> Dependency-free. Tree-shakeable. Side-effect free. About 5.0 kB gzipped for
+> Dependency-free. Tree-shakeable. Side-effect free. About 5.7 kB gzipped for
 > the core, with stream helpers on a separate 3.1 kB subpath.
 
 `yeet` is what happens when `Either` stops being a ceremonial robe and starts
@@ -961,6 +961,12 @@ type ScopeTaskErrors<T extends readonly ScopeTask<any, any>[]> = {
 }
 
 type ScopeSignal = AbortSignal & {
+  acquire<E, A>(
+    factory: (
+      signal: ScopeSignal,
+    ) => A | Either<E, A> | PromiseLike<A | Either<E, A>>,
+    release: (resource: A) => void | PromiseLike<void>,
+  ): AsyncIterableIterator<Left<ExitError<E>>, A>
   fork<E, A>(
     task: (signal: ScopeSignal) => Either<E, A> | PromiseLike<Either<E, A>>,
   ): Promise<Exit<E, A>>
@@ -1069,7 +1075,90 @@ care about, as above. TypeScript cannot see the error type of a detached fork
 that is started and never referenced again; JavaScript may be magical, but it is
 not yet clairvoyant.
 
-The five scoped methods answer five different questions:
+### Scoped Resources
+
+A scope that knows when its children should come home can also remember who
+borrowed the database connection. `signal.acquire` opens a resource only when
+the generator reaches it, hands the factory the scoped signal, and gives you
+the plain resource back through `yield*`. No ceremonial wrapper follows you
+around afterward.
+
+```ts
+const result = await either(async function* ({ signal }) {
+  const conn = yield* signal.acquire(
+    (signal) => pool.connect({ signal }),
+    (conn) => conn.release(),
+  )
+
+  const transaction = yield* signal.acquire(
+    (signal) => beginTransaction(conn, signal),
+    (transaction) => transaction.rollbackUnlessCommitted(),
+  )
+
+  return yield* await checkout(transaction)
+})
+
+// inferred:
+// Promise<Either<Aborted | Rejected | ConnectError | TransactionError | CheckoutError, Receipt>>
+```
+
+The factory may return a raw value, an `Either`, a promise, or a promised
+`Either`. It must be a factory, though. Handing yeet an operation that already
+started is rather like asking the stationmaster to stop a train after it left
+town. With a factory, an already-aborted scope starts nothing, synchronous
+construction errors become data, and the right signal reaches the machinery.
+
+If the resource already knows how to close itself through `Disposable` or
+`AsyncDisposable`, no release callback is needed:
+
+```ts
+const writer = yield * signal.acquire((signal) => openWriter(path, signal))
+```
+
+This is particularly handy for streamed output. The writer stays open while
+bounded child work is still bringing in events, then closes after the last
+child has found its way home.
+
+```ts
+const result = await either(async function* ({ signal }) {
+  const writer = yield* signal.acquire(
+    (signal) => openEventWriter(response, signal),
+    (writer) => writer.close(),
+  )
+
+  for await (const { result } of signal.forkEach(
+    toolCalls,
+    { concurrency: 4 },
+    (call, signal) => runTool(call, signal),
+  )) {
+    writer.write(yield* result)
+  }
+
+  return 'complete' as const
+})
+
+// inferred: Promise<Either<Aborted | Rejected | WriterError | ToolError, 'complete'>>
+```
+
+The distinction is pleasantly small. Native `using` and `await using` own a
+resource until the current block ends. `signal.acquire` owns it until the whole
+scope ends. Pick the shortest honest lifetime. Yeet does not hand you a Proxy,
+a public stack, or a little brass lever marked "release early."
+
+When the scope closes, the children are cancelled and awaited first. Only then
+are the parent resources released, in reverse order, so no child turns around
+to discover that somebody removed its connection mid-sentence. If cleanup
+fails after success, the result becomes `Left<Rejected>`. If several cleanups
+fail, yeet keeps the whole story in `Suppressed`. A domain `Left` or `Aborted`
+remains the headline; cleanup failures are attached underneath it instead of
+rewriting what happened.
+
+Cancellation remains cooperative. A factory that ignores its signal and never
+settles can keep the scope waiting forever. And because this ownership work is
+real runtime work, the optional unplugin leaves generators using `{ signal }`
+alone. The optimizer knows when to leave the room.
+
+The five concurrent methods answer five different questions:
 
 | Method                               | Returns when                        | Failure behavior                                          |
 | ------------------------------------ | ----------------------------------- | --------------------------------------------------------- |
@@ -2097,6 +2186,7 @@ the keys to the old truck.
 | `signal.forkFirst(tasks)` | Return the first child `Right`, or every error in input order        |
 | `signal.forkRace(tasks)`  | Return the first child outcome and abort losing tasks                |
 | `signal.forkEach(...)`    | Lazily map bounded child work and yield outcomes in settlement order |
+| `signal.acquire(...)`     | Acquire a raw resource owned by the current async scope              |
 
 ### Guards And Async Helpers
 

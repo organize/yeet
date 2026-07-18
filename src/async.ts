@@ -304,10 +304,46 @@ export type ScopeTaskErrors<T extends readonly ScopeTask<any, any>[]> = {
   -readonly [K in keyof T]: ExitError<ScopeTaskError<T[K]>>
 }
 
+type AcquiredValue<T> =
+  Awaited<T> extends infer Result
+    ? Result extends Either<any, any>
+      ? InferA<Result>
+      : Result
+    : never
+
+type AcquisitionError<T> =
+  Awaited<T> extends infer Result
+    ? Result extends Either<any, any>
+      ? InferE<Result>
+      : never
+    : never
+
+type AcquisitionEffect<T> = AsyncIterableIterator<
+  Left<ExitError<AcquisitionError<T>>>,
+  AcquiredValue<T>,
+  unknown
+>
+
+type ResourceRelease<T> = (
+  resource: AcquiredValue<T>,
+) => void | PromiseLike<void>
+
+type AcquisitionRelease<T> = [AcquiredValue<T>] extends [
+  Disposable | AsyncDisposable,
+]
+  ? [release?: ResourceRelease<T>]
+  : [release: ResourceRelease<T>]
+
 /**
- * An `AbortSignal` enriched with scoped child work for async `either` flows.
+ * An `AbortSignal` enriched with scoped resources and child work for async
+ * `either` flows.
  */
 export type ScopeSignal = AbortSignal & {
+  /** Acquires a resource owned by the remaining lifetime of this scope. */
+  acquire<const T>(
+    factory: (signal: ScopeSignal) => T,
+    ...release: AcquisitionRelease<T>
+  ): AcquisitionEffect<T>
   fork<A>(
     task: (signal: ScopeSignal) => Right<A> | PromiseLike<Right<A>>,
   ): Promise<Exit<never, A>>
