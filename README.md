@@ -979,25 +979,27 @@ Some things in life should be boring in precisely the right way.
 
 ## Benchmarks
 
-Benchmarks are weather reports, not scripture. The repository includes runtime,
-stream, structured-concurrency, optimizer, memory, and head-to-head suites for
-both Node and Bun.
+Benchmarks are weather reports, not scripture. Still, it helps to know whether
+to pack an umbrella. The table below compares equivalent flows four ways and
+normalizes each runtime's vanilla implementation to `1x`. Results are shown as
+`Node / Bun`; higher is faster.
 
-Runtime-only `yeet` and `better-result` are close enough that workload shape
-matters. Yeet has a small lead on multi-step synchronous flows and
-short-circuits; `better-result` leads on the plain async success path:
+| Scenario                     | Vanilla | `better-result` | `yeet` runtime | `yeet` lowered |
+| ---------------------------- | ------- | --------------- | -------------- | -------------- |
+| Sync single success          | `1x`    | `.08 / .14x`    | `.08 / .11x`   | `.50 / .61x`   |
+| Sync two successes           | `1x`    | `.09 / .19x`    | `.09 / .21x`   | `.48 / .76x`   |
+| Sync failure / short-circuit | `1x`    | `2.53 / 1.85x`  | `2.61 / 2.34x` | `22.1 / 16.3x` |
+| Async two successes          | `1x`    | `.11 / .14x`    | `.09 / .13x`   | `.65 / .72x`   |
+| Complex checkout success     | `1x`    | `.08 / .15x`    | `.10 / .19x`   | `.39 / .76x`   |
 
-| Scenario                      | Result                            |
-| ----------------------------- | --------------------------------- |
-| Two sync successes            | `yeet` faster by `1.05x`          |
-| Sync failure / short-circuit  | `yeet` faster by `1.14x`          |
-| Complex checkout success      | `yeet` faster by `1.14x`          |
-| Async failure / short-circuit | `yeet` faster by `1.15x`          |
-| Async success                 | `better-result` faster by `1.24x` |
+Runtime yeet and `better-result` occupy roughly the same country. The optional
+optimizer is the interesting border crossing: supported flows become ordinary
+branches, running about `3.6-8.5x` faster than yeet's generator runtime in these
+tests. On typed failure, lowered yeet is `16-22x` faster than throwing and
+catching the same error.
 
-The optional optimizer changes the shape more dramatically by lowering supported
-generator flows to ordinary branches. See [Benchmarks](docs/benchmarks.md) for
-commands, stream numbers, methodology, and the JIT's current emotional state.
+See [Benchmarks](docs/benchmarks.md) for raw throughput, exact commands, stream
+results, methodology, and enough caveats to keep everyone honest.
 
 ## License
 
