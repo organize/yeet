@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { either } from './combinators.ts'
-import { type Either, left, right } from './either.ts'
+import { type Either, isLeft } from './either.ts'
 
 type UsedAfterRelease = {
   readonly _tag: 'UsedAfterRelease'
@@ -19,6 +19,8 @@ type SweepRow = {
   readonly released: number
   readonly exposed: boolean
 }
+
+type QueueOrder = 'abort-first' | 'operation-first'
 
 describe('scoped resource ordering', () => {
   it('awaits forkEach child teardown before releasing an outer resource', async () => {
@@ -50,10 +52,10 @@ describe('scoped resource ordering', () => {
     })
   })
 
-  it('releases but never exposes resources across the acquisition abort window', async () => {
+  it('keeps late acquisitions hidden when cancellation is queued first', async () => {
     const rows: SweepRow[] = []
     for (const offset of [-1, 0, 1, 2]) {
-      rows.push(await runAcquisitionSweep(offset))
+      rows.push(await runAcquisitionSweep(offset, 'abort-first'))
     }
 
     expect(rows).toEqual([
@@ -61,6 +63,20 @@ describe('scoped resource ordering', () => {
       { abort: 'N', opened: 1, released: 1, exposed: false },
       { abort: 'N+1', opened: 1, released: 1, exposed: false },
       { abort: 'N+2', opened: 1, released: 1, exposed: false },
+    ])
+  })
+
+  it('moves the acquisition boundary when the operation is queued first', async () => {
+    const rows: SweepRow[] = []
+    for (const offset of [-1, 0, 1, 2]) {
+      rows.push(await runAcquisitionSweep(offset, 'operation-first'))
+    }
+
+    expect(rows).toEqual([
+      { abort: 'N-1', opened: 1, released: 1, exposed: false },
+      { abort: 'N', opened: 1, released: 1, exposed: false },
+      { abort: 'N+1', opened: 1, released: 1, exposed: false },
+      { abort: 'N+2', opened: 1, released: 1, exposed: true },
     ])
   })
 })
@@ -89,7 +105,7 @@ async function runOwnershipScenario(poisonBeforeClose: boolean): Promise<{
       Array.from({ length: workerCount }, (_, worker) => worker),
       { concurrency: workerCount },
       async (worker, child) =>
-        await either(child, async function* ({ signal: childScope }) {
+        await either(child, async function* ({ raise, signal: childScope }) {
           yield* childScope.acquire(
             () => worker,
             () => {
@@ -111,52 +127,57 @@ async function runOwnershipScenario(poisonBeforeClose: boolean): Promise<{
           await allStarted.promise
 
           if (worker === 0) {
-            return left({ _tag: 'LiveDemoDetected' as const })
+            return raise({ _tag: 'LiveDemoDetected' as const })
           }
 
           await aborted(childScope)
-          return right(`stopped:${worker}` as const)
+          return `stopped:${worker}` as const
         }),
     )
 
     const first = await completions.next()
     if (first.done) return 'NoCompletions' as const
     if (poisonBeforeClose) connection.poisoned = true
-    return first.value.result
+    return yield* first.value.result
   })
 
   return { result, events, defects }
 }
 
-async function runAcquisitionSweep(offset: number): Promise<SweepRow> {
+async function runAcquisitionSweep(
+  offset: number,
+  order: QueueOrder,
+): Promise<SweepRow> {
   const openTicks = 4
   const controller = new AbortController()
   let opened = 0
   let released = 0
   let exposed = false
 
-  // Queue cancellation first so a same-microtask tie is adversarial.
-  const abort = microtasks(openTicks + offset).then(() => {
+  const startAbort = async () => {
+    await microtasks(openTicks + offset)
     controller.abort({ _tag: 'SweepAbort', offset })
-  })
+  }
 
-  const outcome = either(controller.signal, async function* ({ signal }) {
-    const resource = yield* signal.acquire(
-      async () => {
-        await microtasks(openTicks)
-        opened++
-        return { id: opened }
-      },
-      () => {
-        released++
-      },
-    )
-    exposed = true
-    return resource
-  })
+  const startOperation = async () =>
+    either(controller.signal, async function* ({ signal }) {
+      const resource = yield* signal.acquire(
+        async () => {
+          await microtasks(openTicks)
+          opened++
+          return { id: opened }
+        },
+        () => {
+          released++
+        },
+      )
+      exposed = true
+      return resource
+    })
 
-  const [result] = await Promise.all([outcome, abort])
-  expect(result._tag).toBe('Left')
+  const abort = order === 'abort-first' ? startAbort() : undefined
+  const outcome = startOperation()
+  await Promise.all([outcome, abort ?? startAbort()])
 
   return {
     abort: formatOffset(offset),
@@ -193,6 +214,6 @@ function deferred<T>(): {
 }
 
 function expectLeft<E>(result: Either<E, unknown>, error: E): void {
-  expect(result._tag).toBe('Left')
-  if (result._tag === 'Left') expect(result.error).toEqual(error)
+  expect(isLeft(result)).toBe(true)
+  if (isLeft(result)) expect(result.error).toEqual(error)
 }
