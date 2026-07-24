@@ -2,7 +2,7 @@ import { afterAll, bench, describe } from 'vitest'
 
 import yeet from '../src/unplugin.ts'
 import { cleanupBenchFixtures, importBenchFixture } from './bench-fixture.ts'
-import { BENCH_OPTS } from './bench-options.ts'
+import { BENCH_OPTS, readPositiveInt } from './bench-options.ts'
 
 const YEET_SOURCE = new URL('../src/index.ts', import.meta.url).href
 const FIXTURE_ID = 'bench/index.bench.fixture.js'
@@ -303,11 +303,6 @@ async function transformWithPlugin(code: string): Promise<string> {
 
 function consume(value: unknown): void {
   benchSink.value = value
-}
-
-function readPositiveInt(name: string, fallback: number): number {
-  const value = Number(process.env[name] ?? fallback)
-  return Number.isFinite(value) && value > 0 ? Math.trunc(value) : fallback
 }
 
 function indexer(): () => number {

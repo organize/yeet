@@ -3,7 +3,7 @@ import { bench, describe } from 'vitest'
 import { forkEachStopped, rejected, siblingSettled } from '../src/async.ts'
 import { either } from '../src/combinators.ts'
 import { type Either, left, right } from '../src/either.ts'
-import { BENCH_OPTS } from './bench-options.ts'
+import { BENCH_OPTS, readPositiveInt } from './bench-options.ts'
 
 type Candidate = (
   signal: AbortSignal,
@@ -587,9 +587,4 @@ function waitForEachAbort(
       once: true,
     })
   })
-}
-
-function readPositiveInt(name: string, fallback: number): number {
-  const value = Number(process.env[name])
-  return Number.isFinite(value) && value > 0 ? Math.trunc(value) : fallback
 }

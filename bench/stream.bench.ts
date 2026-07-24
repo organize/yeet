@@ -4,7 +4,7 @@ import { type Either } from '../src/either.ts'
 import { bytes, collectText, consume, ndjson, sse } from '../src/stream.ts'
 import yeet from '../src/unplugin.ts'
 import { cleanupBenchFixtures, importBenchFixture } from './bench-fixture.ts'
-import { BENCH_OPTS } from './bench-options.ts'
+import { BENCH_OPTS, readPositiveInt } from './bench-options.ts'
 
 const BENCH_BATCH = readPositiveInt('BENCH_BATCH', 16)
 const YEET_SOURCE = new URL('../src/index.ts', import.meta.url).href
@@ -479,9 +479,4 @@ function chunkText(input: string, size: number): string[] {
     chunks.push(input.slice(index, index + size))
   }
   return chunks
-}
-
-function readPositiveInt(name: string, fallback: number): number {
-  const value = Number(process.env[name] ?? fallback)
-  return Number.isFinite(value) && value > 0 ? Math.trunc(value) : fallback
 }

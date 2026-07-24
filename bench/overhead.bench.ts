@@ -6,7 +6,7 @@ import { left, right, type Either } from '../src/either.ts'
 import { ndjson } from '../src/stream.ts'
 import yeet from '../src/unplugin.ts'
 import { cleanupBenchFixtures, importBenchFixture } from './bench-fixture.ts'
-import { BENCH_OPTS } from './bench-options.ts'
+import { BENCH_OPTS, readPositiveInt } from './bench-options.ts'
 
 const YEET_SOURCE = new URL('../src/index.ts', import.meta.url).href
 const STREAM_SOURCE = new URL('../src/stream.ts', import.meta.url).href
@@ -1354,9 +1354,4 @@ async function transformWithPlugin(code: string): Promise<string> {
   }
 
   return typeof result === 'string' ? result : result.code
-}
-
-function readPositiveInt(name: string, fallback: number): number {
-  const value = Number(process.env[name] ?? fallback)
-  return Number.isFinite(value) && value > 0 ? Math.trunc(value) : fallback
 }

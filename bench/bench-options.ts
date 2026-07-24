@@ -2,7 +2,7 @@ const DEFAULT_TIME_MS = 3_000 as const
 const DEFAULT_WARMUP_TIME_MS = 1_000 as const
 const DEFAULT_WARMUP_ITERATIONS = 1_000 as const
 
-const readPositiveInt = (name: string, fallback: number): number => {
+export const readPositiveInt = (name: string, fallback: number): number => {
   const raw = process.env[name]
   if (raw === undefined) return fallback
 
