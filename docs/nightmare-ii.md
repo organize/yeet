@@ -33,11 +33,6 @@ infrastructure.
 - correct ordering leaves `LiveDemoDetected` unsuppressed;
 - a poisoned control produces ordered `UsedAfterRelease` cleanup defects.
 
-A stopped worker's ordinary domain `Left` is discarded like any other losing
-child outcome. Use-after-release is different: it occurs during infrastructure
-cleanup, so it is represented as a cleanup rejection and retained beneath the
-primary result.
-
 ## Ownership Memo
 
 ```text
@@ -48,30 +43,49 @@ OWNERSHIP MEMO
   connection released    : yes
   release happened last  : yes
   used after release     : none
+
+POISONED CONTROL
+  poison before shutdown : yes
+  result                 : Suppressed
+  used after release     : workers 1, 2, 3
 ```
+
+The second run deliberately poisons the connection before child shutdown. The
+same worker checks that report `none` in the healthy run then identify workers
+`1`, `2`, and `3`, and their teardown rejections appear beneath
+`LiveDemoDetected`. The alarm has heard a fire drill.
 
 ## Acquisition Abort Window
 
 The same program drives a signal-ignorant factory for `N` microtasks while
-cancellation is queued at four points around completion:
+cancellation is queued at four points around completion. It runs the sweep
+twice, changing only which countdown enters the microtask queue first:
 
 ```text
 ACQUISITION ABORT WINDOW
+
+  abort queued first (adversarial)
   abort  opened  released  exposed
   N-1    1       1         no
   N      1       1         no
   N+1    1       1         no
   N+2    1       1         no
+
+  operation queued first
+  abort  opened  released  exposed
+  N-1    1       1         no
+  N      1       1         no
+  N+1    1       1         no
+  N+2    1       1         yes
 ```
 
 Cancellation is queued first, so a same-microtask tie is adversarial. Each
 factory is already in flight and therefore opens one resource. Yeet registers
 and releases every opened resource, but none reaches the generator body.
 
-If the operation is queued first, `N+2` can legitimately become the first
-exposed row: the generator has won that microtask before cancellation arrives.
-Fixing the queue order makes the edge reproducible instead of pretending both
-orders mean the same thing.
+Queue the operation first and the boundary visibly moves: `N+2` is exposed
+before cancellation arrives, then released normally. The paired tables separate
+the ownership guarantee from one particular scheduling choice.
 
 The same contracts are locked by
 [src/resource-order.test.ts](../src/resource-order.test.ts), including a

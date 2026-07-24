@@ -10,6 +10,16 @@ input, and cleanup all become inconvenient at once.
 The jokes are scenery. The invariant under pressure is the reason the program
 exists.
 
+One rule predicts the failure memos in both programs:
+
+**Losing domain outcomes are noise; cleanup defects are evidence.**
+
+When one child decides the scope, an ordinary `Left` returned later by a stopped
+sibling is a losing value, not another failure of the operation. It is
+discarded. A teardown rejection is different: that defect happened while the
+scope was trying to become safe. Yeet retains it beneath the primary outcome as
+`Suppressed`.
+
 | Case                                                    | System under stress                                                                                                           | What must remain true                                                                                                                         |
 | ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
 | [I: Quarterly Synergy Reconciliation](./nightmare-i.md) | A malformed NDJSON expense feed fans into bounded AI and policy work while transactions, SSE streams, and cancellation unwind | One primary domain failure survives; cleanup defects remain attached; unread transport data stays unread; the final outcome survives the wire |
