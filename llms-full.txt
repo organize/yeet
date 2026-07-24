@@ -66,7 +66,7 @@ type Either<E, A> = Left<E> | Right<A>
 ```ts
 either(fn: (raise: RaiseContext) => Generator<Either<any, any>, Ret>): Either<E, A>
 either(fn: (raise: RaiseContext) => AsyncGenerator<...>): Promise<Either<E, A>>
-either(signal: AbortSignal, fn: (raise: AbortRaise, signal: ScopeSignal) => AsyncGenerator<...>): Promise<Either<Aborted | E, A>>
+either(signal: AbortSignal, fn: (raise: RaiseContext, signal: ScopeSignal) => AsyncGenerator<...>): Promise<Either<Aborted | E, A>>
 ```
 
 Sync:
@@ -526,6 +526,6 @@ types: Either, Left, Right, Rejected, Aborted, SiblingSettled, ForkEachStopped,
        StreamError, StreamReadError, StreamExternalError, StreamConsumerError,
        StreamTooLarge, TextTooLarge, LineTooLarge, InvalidChunk, DecodeError,
        ParseError, ByteSource, StreamSource, SseEvent, RaiseContext, ScopeSignal,
-       ScopeTask, ScopeTaskError, ScopeTaskErrors, ScopeTaskValue, ScopeTaskValues, AbortRaise,
+       ScopeTask, ScopeTaskError, ScopeTaskErrors, ScopeTaskValue, ScopeTaskValues,
        Exit, ExitError, ExitErrorSchema, SerializedExitSchema, ExitSchema
 ```

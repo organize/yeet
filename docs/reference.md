@@ -16,13 +16,13 @@ want and would prefer that the documentation simply tell you its name.
 
 ## Generator Runners
 
-| API                       | Description                                                        |
-| ------------------------- | ------------------------------------------------------------------ |
-| `either(fn)`              | Short-circuiting sync or async generator runner                    |
-| `either(signal, asyncFn)` | Abort-aware async runner; `asyncFn` receives a scoped `AbortRaise` |
-| `validate(fn)`            | Accumulate every yielded error                                     |
-| `firstOf(fn)`             | Return the first yielded `Right`                                   |
-| `collect(fn)`             | Partition yielded values into errors and values                    |
+| API                       | Description                                                          |
+| ------------------------- | -------------------------------------------------------------------- |
+| `either(fn)`              | Short-circuiting sync or async generator runner                      |
+| `either(signal, asyncFn)` | Abort-aware async runner; `asyncFn` receives a scoped `RaiseContext` |
+| `validate(fn)`            | Accumulate every yielded error                                       |
+| `firstOf(fn)`             | Return the first yielded `Right`                                     |
+| `collect(fn)`             | Partition yielded values into errors and values                      |
 
 ## Concurrency
 

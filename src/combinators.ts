@@ -1,12 +1,11 @@
 import {
   type Aborted,
-  type AbortRaise,
+  type RaiseContext,
   type Exit,
   type ForkEachCompletion,
   type ForkEachIterator,
   type ForkEachOptions,
   type ForkEachTask,
-  type RaiseContext,
   type Rejected,
   type ScopeSignal,
   type ScopeTask,
@@ -1329,7 +1328,7 @@ export function either<Eff extends Either<any, any>, Ret>(
 
 export function either<Eff extends Either<any, any>, Ret>(
   signal: AbortSignal,
-  fn: (raise: AbortRaise, signal: ScopeSignal) => AsyncGenerator<Eff, Ret>,
+  fn: (raise: RaiseContext, signal: ScopeSignal) => AsyncGenerator<Eff, Ret>,
 ): Promise<
   Either<
     Aborted | InferE<Eff> | InferE<Extract<Ret, Left<any>>>,
@@ -1344,7 +1343,7 @@ export function either<Eff extends Either<any, any>, Ret>(
         raise: RaiseContext,
       ) => Generator<Eff, Ret, unknown> | AsyncGenerator<Eff, Ret, unknown>),
   fn?: (
-    raise: AbortRaise,
+    raise: RaiseContext,
     signal: ScopeSignal,
   ) => AsyncGenerator<Eff, Ret, unknown>,
 ): Either<any, any> | Promise<Either<any, any>> {

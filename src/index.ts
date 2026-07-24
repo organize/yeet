@@ -39,7 +39,6 @@ export {
 
 export type {
   Aborted,
-  AbortRaise,
   Exit,
   ExitError,
   ForkEachCompletion,

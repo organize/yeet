@@ -377,8 +377,3 @@ export type RaiseContext = Raise & {
   readonly raise: RaiseContext
   readonly signal: ScopeSignal
 }
-
-/**
- * Backwards-compatible name for the abort-aware `either` context.
- */
-export type AbortRaise = RaiseContext

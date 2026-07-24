@@ -76,8 +76,6 @@ type RaiseContext = Raise & {
   readonly raise: RaiseContext
   readonly signal: ScopeSignal
 }
-
-type AbortRaise = RaiseContext
 ```
 
 Use `async function* ({ raise, signal })` when you need both. If you only need
