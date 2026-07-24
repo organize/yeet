@@ -1,11 +1,11 @@
 import { afterAll, bench, describe } from 'vitest'
 
+import yeet from '../src/unplugin.ts'
 import { cleanupBenchFixtures, importBenchFixture } from './bench-fixture.ts'
 import { BENCH_OPTS } from './bench-options.ts'
-import yeet from './unplugin.ts'
 
-const YEET_SOURCE = new URL('./index.ts', import.meta.url).href
-const FIXTURE_ID = 'src/index.bench.fixture.js'
+const YEET_SOURCE = new URL('../src/index.ts', import.meta.url).href
+const FIXTURE_ID = 'bench/index.bench.fixture.js'
 const BENCH_BATCH = readPositiveInt('BENCH_BATCH', 64)
 
 type BenchModule = {

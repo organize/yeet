@@ -17,9 +17,9 @@ import { Result } from 'better-result'
  */
 import { bench, describe } from 'vitest'
 
+import { either } from '../src/combinators.js'
+import { left, right, type Either } from '../src/either.js'
 import { BENCH_OPTS } from './bench-options.js'
-import { either } from './combinators.js'
-import { left, right, type Either } from './either.js'
 
 type User = { id: string; name: string; active: boolean }
 type Order = { id: string; userId: string }

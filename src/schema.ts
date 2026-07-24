@@ -5,13 +5,13 @@ import { type Either, type SerializedEither, fromJSON } from './either.ts'
 const VENDOR = 'yeet'
 
 /** A Standard Schema issue. */
-export type StandardSchemaIssue = {
+type StandardSchemaIssue = {
   readonly message: string
   readonly path?: ReadonlyArray<PropertyKey | { readonly key: PropertyKey }>
 }
 
 /** A Standard Schema validation result. */
-export type StandardSchemaResult<Output> =
+type StandardSchemaResult<Output> =
   | { readonly value: Output; readonly issues?: undefined }
   | { readonly issues: ReadonlyArray<StandardSchemaIssue> }
 
@@ -39,7 +39,7 @@ export type StandardJSONSchemaV1<Input = unknown, Output = Input> = {
   }
 }
 
-export type StandardJSONSchemaOptions = {
+type StandardJSONSchemaOptions = {
   readonly target: 'draft-2020-12' | 'draft-07' | 'openapi-3.0' | ({} & string)
   readonly libraryOptions?: Record<string, unknown>
 }
@@ -47,10 +47,7 @@ export type StandardJSONSchemaOptions = {
 type JsonSchema = Record<string, unknown>
 
 /** A Standard Schema that may also expose Standard JSON Schema conversion. */
-export type StandardSchemaWithOptionalJSONSchemaV1<
-  Input = unknown,
-  Output = Input,
-> = {
+type StandardSchemaWithOptionalJSONSchemaV1<Input = unknown, Output = Input> = {
   readonly '~standard': StandardSchemaV1<Input, Output>['~standard'] & {
     readonly jsonSchema?: StandardJSONSchemaV1<
       Input,

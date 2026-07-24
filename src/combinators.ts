@@ -1400,7 +1400,7 @@ export function either<Eff extends Either<any, any>, Ret>(
  *
  * @param e - An `Either` value to check.
  */
-export function* check<E, A>(
+function* check<E, A>(
   e: Either<E, A>,
 ): Generator<Either<E, A>, A | undefined, undefined> {
   yield e

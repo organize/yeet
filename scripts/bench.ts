@@ -170,6 +170,6 @@ Targets:
 Examples:
   bun run bench --target node
   bun run bench --target bun --quick
-  bun run bench --target node src/overhead.bench.ts
+  bun run bench --target node bench/overhead.bench.ts
 `)
 }

@@ -185,7 +185,7 @@ function raiseImpl(x: unknown): Promise<Either<Rejected, unknown>> | Left<any> {
  * Existing `Either` failures are flattened alongside `Rejected`; raw success
  * values are wrapped in `Right`.
  */
-export type Captured<T> = [T] extends [never]
+type Captured<T> = [T] extends [never]
   ? Either<Rejected, never>
   : T extends Either<any, any>
     ? Either<InferE<T> | Rejected, InferA<T>>

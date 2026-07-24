@@ -1,15 +1,15 @@
 import { afterAll, bench, describe } from 'vitest'
 
+import { type Either } from '../src/either.ts'
+import { bytes, collectText, consume, ndjson, sse } from '../src/stream.ts'
+import yeet from '../src/unplugin.ts'
 import { cleanupBenchFixtures, importBenchFixture } from './bench-fixture.ts'
 import { BENCH_OPTS } from './bench-options.ts'
-import { type Either } from './either.ts'
-import { bytes, collectText, consume, ndjson, sse } from './stream.ts'
-import yeet from './unplugin.ts'
 
 const BENCH_BATCH = readPositiveInt('BENCH_BATCH', 16)
-const YEET_SOURCE = new URL('./index.ts', import.meta.url).href
-const STREAM_SOURCE = new URL('./stream.ts', import.meta.url).href
-const FIXTURE_ID = 'src/stream.bench.fixture.js'
+const YEET_SOURCE = new URL('../src/index.ts', import.meta.url).href
+const STREAM_SOURCE = new URL('../src/stream.ts', import.meta.url).href
+const FIXTURE_ID = 'bench/stream.bench.fixture.js'
 const encoder = new TextEncoder()
 const decoder = new TextDecoder()
 const benchSink = { value: undefined as unknown }

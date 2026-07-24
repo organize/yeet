@@ -1,9 +1,9 @@
 import { bench, describe } from 'vitest'
 
-import { forkEachStopped, rejected, siblingSettled } from './async.ts'
+import { forkEachStopped, rejected, siblingSettled } from '../src/async.ts'
+import { either } from '../src/combinators.ts'
+import { type Either, left, right } from '../src/either.ts'
 import { BENCH_OPTS } from './bench-options.ts'
-import { either } from './combinators.ts'
-import { type Either, left, right } from './either.ts'
 
 type Candidate = (
   signal: AbortSignal,

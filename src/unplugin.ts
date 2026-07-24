@@ -35,4 +35,5 @@ export const yeet: YeetUnplugin = createUnplugin<
   },
 }))
 
+/** @alias yeet */
 export default yeet

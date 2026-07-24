@@ -1,16 +1,16 @@
 import { Result } from 'better-result'
 import { afterAll, bench, describe } from 'vitest'
 
+import { either } from '../src/combinators.ts'
+import { left, right, type Either } from '../src/either.ts'
+import { ndjson } from '../src/stream.ts'
+import yeet from '../src/unplugin.ts'
 import { cleanupBenchFixtures, importBenchFixture } from './bench-fixture.ts'
 import { BENCH_OPTS } from './bench-options.ts'
-import { either } from './combinators.ts'
-import { left, right, type Either } from './either.ts'
-import { ndjson } from './stream.ts'
-import yeet from './unplugin.ts'
 
-const YEET_SOURCE = new URL('./index.ts', import.meta.url).href
-const STREAM_SOURCE = new URL('./stream.ts', import.meta.url).href
-const FIXTURE_ID = 'src/overhead.bench.fixture.js'
+const YEET_SOURCE = new URL('../src/index.ts', import.meta.url).href
+const STREAM_SOURCE = new URL('../src/stream.ts', import.meta.url).href
+const FIXTURE_ID = 'bench/overhead.bench.fixture.js'
 const BENCH_BATCH = readPositiveInt('BENCH_BATCH', 64)
 
 type User = {

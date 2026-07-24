@@ -13,8 +13,8 @@ and after lowering.
 ## Reproduce It
 
 ```sh
-bun run bench --target node src/overhead.bench.ts
-bun run bench --target bun src/overhead.bench.ts
+bun run bench --target node bench/overhead.bench.ts
+bun run bench --target bun bench/overhead.bench.ts
 ```
 
 For the rest of the suites:
