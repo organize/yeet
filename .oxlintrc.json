@@ -7,14 +7,19 @@
   },
   "rules": {
     "typescript/no-unnecessary-type-assertion": "error",
-    "unicorn/prefer-at": "error",
-    "prefer-const": "error",
     "typescript/prefer-find": "error",
-    "unicorn/prefer-number-properties": "error",
     "typescript/prefer-reduce-type-parameter": "error",
-    "unicorn/prefer-set-has": "error",
     "typescript/prefer-return-this-type": "error",
+    "typescript/promise-function-async": "error",
+    "typescript/no-unnecessary-type-conversion": "error",
+    "typescript/no-unnecessary-type-parameters": "error",
+    "typescript/no-unsafe-return": "error",
+
+    "unicorn/prefer-at": "error",
+    "unicorn/prefer-number-properties": "error",
+    "unicorn/prefer-set-has": "error",
+
     "prefer-template": "error",
-    "typescript/promise-function-async": "error"
+    "prefer-const": "error"
   }
 }

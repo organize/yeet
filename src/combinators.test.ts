@@ -2279,6 +2279,7 @@ describe('signal.acquire', () => {
     const invalidSync = () =>
       either(function* ({ signal }) {
         // @ts-expect-error Acquisition effects are async-only.
+        // oxlint-disable-next-line typescript/no-unsafe-return
         return yield* signal.acquire(() => disposable('sync', []))
       })
 

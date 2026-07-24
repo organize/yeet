@@ -379,8 +379,8 @@ function createScopeRuntime(parent?: AbortSignal): ScopeRuntime {
     }
   }
 
-  function acquireScopedResource<T>(
-    factory: (signal: ScopeSignal) => T,
+  function acquireScopedResource(
+    factory: (signal: ScopeSignal) => unknown,
     release?: ResourceRelease,
   ): AcquisitionIterator {
     ensureForkEnabled('acquire')
@@ -500,8 +500,8 @@ function createScopeRuntime(parent?: AbortSignal): ScopeRuntime {
   }
 
   // oxlint-disable-next-line typescript/promise-function-async
-  function forkAllScopedTasks<const T extends readonly ScopeTask<any, any>[]>(
-    tasks: T,
+  function forkAllScopedTasks(
+    tasks: readonly ScopeTask<any, any>[],
   ): Promise<Exit<any, any[]>> {
     ensureForkEnabled('forkAll')
 
@@ -552,8 +552,8 @@ function createScopeRuntime(parent?: AbortSignal): ScopeRuntime {
   }
 
   // oxlint-disable-next-line typescript/promise-function-async
-  function forkFirstScopedTasks<const T extends readonly ScopeTask<any, any>[]>(
-    tasks: T,
+  function forkFirstScopedTasks(
+    tasks: readonly ScopeTask<any, any>[],
   ): Promise<Exit<any[], any>> {
     ensureForkEnabled('forkFirst')
 
@@ -615,8 +615,8 @@ function createScopeRuntime(parent?: AbortSignal): ScopeRuntime {
   }
 
   // oxlint-disable-next-line typescript/promise-function-async
-  function forkRaceScopedTasks<const T extends readonly ScopeTask<any, any>[]>(
-    tasks: T,
+  function forkRaceScopedTasks(
+    tasks: readonly ScopeTask<any, any>[],
   ): Promise<Exit<any, any>> {
     ensureForkEnabled('forkRace')
 
