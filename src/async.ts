@@ -12,7 +12,7 @@ import {
  * Represents a `Promise` rejection captured as a typed `Left` value.
  * Produced by {@link raise} when passed a rejected `Promise`.
  */
-export type Rejected<Cause = unknown> = {
+export type Rejected<out Cause = unknown> = {
   readonly _tag: 'Rejected'
   readonly cause: Cause
 }
@@ -33,7 +33,7 @@ export const toRejectedLeft = (cause: unknown): Left<Rejected> =>
  * Represents an outcome where the primary failure is preserved, but cleanup or
  * sibling teardown also failed while the scope was unwinding.
  */
-export type Suppressed<Error = unknown, SuppressedError = unknown> = {
+export type Suppressed<out Error = unknown, out SuppressedError = unknown> = {
   readonly _tag: 'Suppressed'
   readonly error: Error
   readonly suppressed: readonly SuppressedError[]
@@ -86,7 +86,7 @@ export const forkEachStopped = (): ForkEachStopped => FORK_EACH_STOPPED
  * Produced by `either(signal, async function* () { ... })` when the signal
  * aborts while the async generator is running.
  */
-export type Aborted<Reason = unknown> = {
+export type Aborted<out Reason = unknown> = {
   readonly _tag: 'Aborted'
   readonly reason: Reason
 }
@@ -252,7 +252,7 @@ export type Raise = typeof raise
  * The task receives a child signal that aborts with the enclosing async
  * `either` scope.
  */
-export type ScopeTask<E, A> = (
+export type ScopeTask<out E, out A> = (
   signal: ScopeSignal,
 ) => Either<E, A> | PromiseLike<Either<E, A>>
 
@@ -262,14 +262,14 @@ export type ForkEachOptions = {
 }
 
 /** A task mapped over an input by {@link ScopeSignal.forkEach}. */
-export type ForkEachTask<Input, E, A> = (
+export type ForkEachTask<in Input, out E, out A> = (
   item: Input,
   signal: ScopeSignal,
   index: number,
 ) => Either<E, A> | PromiseLike<Either<E, A>>
 
 /** A task outcome emitted by {@link ScopeSignal.forkEach}. */
-export type ForkEachCompletion<Input, E, A> = {
+export type ForkEachCompletion<out Input, out E, out A> = {
   readonly item: Input
   readonly index: number
   readonly result: Exit<E, A>

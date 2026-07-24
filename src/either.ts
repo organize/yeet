@@ -21,13 +21,13 @@ export type SerializedPayload<T> = T extends { toJSON(): infer J }
     : T
 
 /** The JSON representation of a {@link Left}. */
-export type SerializedLeft<E> = {
+export type SerializedLeft<out E> = {
   readonly _tag: 'Left'
   readonly error: E
 }
 
 /** The JSON representation of a {@link Right}. */
-export type SerializedRight<A> = {
+export type SerializedRight<out A> = {
   readonly _tag: 'Right'
   readonly value: A
 }
@@ -83,7 +83,7 @@ class LeftIterator<E> implements Iterator<Left<E>, never, unknown> {
  *
  * @typeParam E - The error type.
  */
-export class Left<E> {
+export class Left<out E> {
   readonly _tag = 'Left' as const
   readonly error: E
 
@@ -113,7 +113,7 @@ export class Left<E> {
  *
  * @typeParam A - The success type.
  */
-export class Right<A> {
+export class Right<out A> {
   readonly _tag = 'Right' as const
   readonly value: A
 
