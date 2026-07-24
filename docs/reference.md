@@ -81,29 +81,7 @@ Import these from `@big-time/yeet/stream`.
 | `ndjson(source, options?)`      | Yield parsed NDJSON records as `Either` values            |
 | `sse(source, options?)`         | Yield server-sent events as `Either` values               |
 
-## Lower-Level Machinery
-
-If you want to drive a generator yourself, `fold` and `foldAsync` accept a
-`Strategy`:
-
-```ts
-type Strategy<Eff, Ret, Acc, R> = {
-  init: () => Acc
-  step: (eff: Eff, acc: Acc) => Step<Acc, R>
-  finish: (ret: Ret, acc: Acc) => R
-}
-```
-
-Everything higher-level in `yeet` is built from the same idea: initialize an
-accumulator, handle each yielded value, and finish when the generator returns.
-
-Most people will never need this. But it is there, because sometimes you want
-the keys to the old truck.
-
-| API                              | Description                                     |
-| -------------------------------- | ----------------------------------------------- |
-| `fold(fn, strategy)`             | Drive a sync generator with a custom strategy   |
-| `foldAsync(generator, strategy)` | Drive an async generator with a custom strategy |
+## Value Objects
 
 `Left` and `Right` are small classes with `Symbol.iterator`, `toJSON`, and
 `Symbol.toPrimitive` support. They work nicely with `yield*`, JSON

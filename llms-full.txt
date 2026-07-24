@@ -481,21 +481,6 @@ Nested schemas are optional; without them the outer `{ _tag, error | value }` en
 For `Exit`, omitting the domain `error` schema accepts only yeet's built-in
 `Aborted`, `Rejected`, and `Suppressed` error payloads.
 
-## Lower-level: fold / foldAsync
-
-Drive a generator yourself with a `Strategy`. Everything above is built on this. Most code never needs it.
-
-```ts
-type Strategy<Eff, Ret, Acc, R> = {
-  init: () => Acc
-  step: (eff: Eff, acc: Acc) => Step<Acc, R> // { done: true, result } | { done: false, send, acc }
-  finish: (ret: Ret, acc: Acc) => R
-}
-
-fold(fn: () => Generator<Eff, Ret>, strategy): R
-foldAsync(gen: AsyncGenerator<Eff, Ret>, strategy): Promise<R>
-```
-
 ## Build-time transform (optional, recommended for hot paths)
 
 `yeet` ships an unplugin that lowers `either` / `validate` / `firstOf` / `collect` generators into plain branches at build time — `const x = yield* f()` becomes `const t = f(); if (t._tag === 'Left') return t; const x = t.value`. This removes generator allocation/resume/close overhead entirely. Inside lowered `either`, direct `right`, `left`, `ensure`, and `ensureNotNull` steps are fused too, so their intermediate Either is never created. Local `raise.capture(...)` boundaries, immutable `const` aliases initialized by Either-producing calls, and destructured `{ raise }` / `{ raise: fail }` parameters are supported. It is optional: code runs correctly without it; the transform only changes performance, not behavior.
@@ -533,11 +518,10 @@ either validate firstOf collect all collectAll
 ensure ensureNotNull raise siblingSettled forkEachStopped suppressed
 fromJSON isSerializedEither serializedEitherSchema eitherSchema
 exitErrorSchema serializedExitSchema exitSchema
-fold foldAsync
 stream subpath: bytes text json chunks consume collectText lines ndjson sse
 types: Either, Left, Right, Rejected, Aborted, SiblingSettled, ForkEachStopped,
        ForkEachOptions, ForkEachTask, ForkEachCompletion, ForkEachIterator,
-       Suppressed, Check, Raise, Strategy, Step, SerializedEither,
+       Suppressed, Check, Raise, SerializedEither,
        SerializedLeft, SerializedRight, Collected, InferE, InferA,
        StreamError, StreamReadError, StreamExternalError, StreamConsumerError,
        StreamTooLarge, TextTooLarge, LineTooLarge, InvalidChunk, DecodeError,

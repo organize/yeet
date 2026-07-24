@@ -79,7 +79,7 @@ class LeftIterator<E> implements Iterator<Left<E>, never, unknown> {
 /**
  * The error branch of an {@link Either}. Yielding a `Left` from a generator
  * short-circuits the computation; returning one propagates the error through
- * the finish handler of the active {@link Strategy}.
+ * the active generator runner.
  *
  * @typeParam E - The error type.
  */

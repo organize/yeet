@@ -37,9 +37,6 @@ export {
   exitSchema,
 } from './schema.ts'
 
-export type { Step, Strategy } from './fold.ts'
-export { fold, foldAsync } from './fold.ts'
-
 export type {
   Aborted,
   AbortRaise,
