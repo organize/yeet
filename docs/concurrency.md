@@ -228,6 +228,11 @@ fail, yeet keeps the whole story in `Suppressed`. A domain `Left` or `Aborted`
 remains the headline; cleanup failures are attached underneath it instead of
 rewriting what happened.
 
+That ordering is exercised end-to-end by
+[Nightmare II](./nightmare-ii.md): four bounded children share one outer
+connection, touch it during abort teardown, and turn any early release into a
+tagged defect in the final memo.
+
 Cancellation remains cooperative. A factory that ignores its signal and never
 settles can keep the scope waiting forever. And because this ownership work is
 real runtime work, the optional unplugin leaves generators using `{ signal }`

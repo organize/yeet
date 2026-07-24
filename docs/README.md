@@ -13,6 +13,7 @@ connection that would very much like to be closed.
 | [Composition Helpers](./composition.md)                     | Capture, concurrent inputs, validation, first success, and result collection                      |
 | [Serialization And Schemas](./serialization.md)             | JSON round trips, Standard Schema validation, Exit outcomes, and JSON Schema                      |
 | [Build-Time Optimizer](./optimizer.md)                      | Unplugin setup, supported lowering, bailouts, and the disappearing-generator trick                |
+| [Nightmares](./nightmares.md)                               | Complex executable scenarios for streams, concurrency, cleanup, ownership, and cancellation       |
 | [API Reference](./reference.md)                             | The exported surface and low-level folding machinery                                              |
 | [Benchmarks](./benchmarks.md)                               | Commands, methodology, runtime comparisons, and the usual warnings about passing clouds           |
 

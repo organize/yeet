@@ -36,5 +36,5 @@
     "allowUnusedLabels": false,
     "allowUnreachableCode": false
   },
-  "include": ["src/**/*", "scripts"]
+  "include": ["src/**/*", "scripts", "examples"]
 }
