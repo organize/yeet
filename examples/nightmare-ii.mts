@@ -1,3 +1,4 @@
+// oxlint-disable typescript/no-unnecessary-condition
 import { type Either, either, isLeft, isRight } from '../src/index.ts'
 
 type UsedAfterRelease = {

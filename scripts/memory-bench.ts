@@ -426,12 +426,8 @@ async function runChildProcess() {
   const mode = process.env['MEMORY_BENCH_MODE'] as Mode
   const scenario = scenarios[scenarioIndex]
 
-  if (!scenario || (impl !== 'yeet' && impl !== 'better-result')) {
+  if (!scenario) {
     throw new Error('Invalid memory benchmark child configuration')
-  }
-
-  if (mode !== 'transient' && mode !== 'retained') {
-    throw new Error('Invalid memory benchmark mode')
   }
 
   const result = await measureChild(scenario, impl, mode)

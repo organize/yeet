@@ -67,6 +67,7 @@ async function eitherAsync<Eff extends Either<any, any>, Ret>(
     let value: unknown
     let hasValue = false
 
+    // oxlint-disable-next-line typescript/no-unnecessary-condition
     while (true) {
       const before = peekScope(scope)
       const existing = before?.currentFailure()
@@ -221,6 +222,7 @@ class AcquisitionIterator implements AsyncIterableIterator<
       this.#pending = this.#run()
       return this.#pending
     }
+    // oxlint-disable-next-line typescript/no-unnecessary-condition
     return this.#state === 0
       ? this.#pending.then(() => this.#done)
       : Promise.resolve(this.#done)
@@ -781,6 +783,7 @@ function createScopeRuntime(parent?: AbortSignal): ScopeRuntime {
 
       try {
         while (
+          // oxlint-disable-next-line typescript/no-unnecessary-condition
           !closed &&
           !sourceDone &&
           active.size + completions.length < concurrency
@@ -790,6 +793,7 @@ function createScopeRuntime(parent?: AbortSignal): ScopeRuntime {
           const next = await sourcePull
           sourcePull = undefined
 
+          // oxlint-disable-next-line typescript/no-unnecessary-condition
           if (closed) return
           if (next.done) {
             sourceDone = true
@@ -802,6 +806,7 @@ function createScopeRuntime(parent?: AbortSignal): ScopeRuntime {
         }
       } catch (cause) {
         sourcePull = undefined
+        // oxlint-disable-next-line typescript/no-unnecessary-condition
         if (!closed) failFromSource(cause)
       } finally {
         pumping = false
@@ -1384,7 +1389,7 @@ export function either<Eff extends Either<any, any>, Ret>(
   try {
     return eitherSync(gen)
   } finally {
-    const scope = contextState.scope
+    const scope = 'scope' in contextState ? contextState.scope : undefined
     if (scope !== undefined) void scope.close()
   }
 }

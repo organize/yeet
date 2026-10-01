@@ -74,6 +74,7 @@ describe('either (sync)', () => {
   it('short-circuits when raise() is yielded', () => {
     const result = either(function* (raise) {
       const user = yield* getUser('1')
+      // oxlint-disable-next-line typescript/no-unnecessary-condition
       if (user.active) yield* raise('ForceInactive' as const)
       return user
     })
@@ -84,6 +85,7 @@ describe('either (sync)', () => {
   it('does not short-circuit when the condition is not met', () => {
     const result = either(function* (raise) {
       const user = yield* getUser('1')
+      // oxlint-disable-next-line typescript/no-unnecessary-condition
       if (!user.active) return raise('UserInactive' as const)
       return user
     })
@@ -94,6 +96,7 @@ describe('either (sync)', () => {
   it('full program: success path', () => {
     const result = either(function* (raise) {
       const user = yield* getUser('1')
+      // oxlint-disable-next-line typescript/no-unnecessary-condition
       if (!user.active) return raise('UserInactive' as const)
       const orders = yield* getOrders(user.id)
       if (!orders[0]) return raise('NoOrders' as const)
@@ -109,6 +112,7 @@ describe('either (sync)', () => {
   it('full program: unknown user short-circuits', () => {
     const result = either(function* (raise) {
       const user = yield* getUser('999')
+      // oxlint-disable-next-line typescript/no-unnecessary-condition
       if (!user.active) return raise('UserInactive' as const)
       const orders = yield* getOrders(user.id)
       if (!orders[0]) return raise('NoOrders' as const)

@@ -633,8 +633,7 @@ function isValidateYield(
   if (!calleePath.isIdentifier()) return false
   if (calleePath.scope.getBinding(callee.name) !== checkBinding) return false
 
-  const statement = path.getStatementParent()
-  return statement !== null && isDirectLowerableYieldPosition(path, statement)
+  return isDirectLowerableYieldPosition(path, path.getStatementParent())
 }
 
 function isAllowedCheckReference(path: NodePath<t.Identifier>): boolean {
@@ -648,7 +647,7 @@ function isDirectYieldExpressionStatement(
   path: NodePath<t.YieldExpression>,
 ): boolean {
   const statement = path.getStatementParent()
-  if (statement === null || !statement.inList) return false
+  if (!statement.inList) return false
   if (!statement.isExpressionStatement()) return false
   return statement.get('expression') === path
 }
@@ -671,7 +670,6 @@ function isLowerableYield(
   }
 
   const statement = path.getStatementParent()
-  if (statement === null) return false
   return isDirectLowerableYieldPosition(path, statement)
 }
 
@@ -854,6 +852,7 @@ function isDirectLowerableYieldPosition(
 
   const expression = skipTransparentParents(path)
   const parent = expression.parentPath
+  // oxlint-disable-next-line typescript/no-unnecessary-condition
   if (parent === null) return false
 
   if (statement.isExpressionStatement()) {
@@ -884,11 +883,10 @@ function isDirectLowerableYieldPosition(
 function skipTransparentParents(path: NodePath<any>): NodePath<any> {
   let current = path
   while (
-    current.parentPath !== null &&
-    (current.parentPath.isTSAsExpression() ||
-      current.parentPath.isTSSatisfiesExpression() ||
-      current.parentPath.isTSNonNullExpression() ||
-      current.parentPath.isParenthesizedExpression())
+    current.parentPath.isTSAsExpression() ||
+    current.parentPath.isTSSatisfiesExpression() ||
+    current.parentPath.isTSNonNullExpression() ||
+    current.parentPath.isParenthesizedExpression()
   ) {
     current = current.parentPath
   }
@@ -1008,6 +1006,7 @@ function rewriteYieldExpressions(
     YieldExpression(path: NodePath<t.YieldExpression>) {
       const statement = path.getStatementParent()
       const argument = path.node.argument
+      // oxlint-disable-next-line typescript/no-unnecessary-condition
       if (statement === null || argument === null) return
       rewrites.push(
         buildEitherYieldRewrite(path, statement, source, leftHelper),
@@ -1145,7 +1144,7 @@ function rewriteValidateYields(
     YieldExpression(path: NodePath<t.YieldExpression>) {
       const statement = path.getStatementParent()
       const input = getValidateYieldInput(path)
-      if (statement === null || input === undefined) return
+      if (input === undefined) return
 
       const temp = path.scope.generateUidIdentifier('yeet')
       const prelude = [
@@ -1188,7 +1187,7 @@ function rewriteFirstOfYields(
     YieldExpression(path: NodePath<t.YieldExpression>) {
       const statement = path.getStatementParent()
       const input = path.node.argument
-      if (statement === null || input === null || input === undefined) return
+      if (input === null || input === undefined) return
 
       rewrites.push({
         statement,
@@ -1227,7 +1226,7 @@ function rewriteCollectYields(
     YieldExpression(path: NodePath<t.YieldExpression>) {
       const statement = path.getStatementParent()
       const input = path.node.argument
-      if (statement === null || input === null || input === undefined) return
+      if (input === null || input === undefined) return
 
       rewrites.push({
         statement,

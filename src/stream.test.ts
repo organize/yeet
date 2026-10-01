@@ -272,7 +272,7 @@ describe('chunks', () => {
     controller.abort('stop')
 
     const result = await pending
-    await iterator.return?.()
+    await iterator.return()
 
     expect(result.done).toBe(false)
     if (!result.done) {

@@ -503,6 +503,7 @@ async function* manualEachIterator(
         ({ promise }) => promise,
       ),
     )
+    // oxlint-disable-next-line typescript/no-unnecessary-condition
     if (!sourceDone) await source.return?.(reason)
   }
 }

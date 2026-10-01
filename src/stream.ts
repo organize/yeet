@@ -168,6 +168,7 @@ export async function bytes(
   const canStop = stop.promise !== undefined
 
   try {
+    // oxlint-disable-next-line typescript/no-unnecessary-condition
     while (true) {
       let result: IteratorResult<unknown>
       if (canStop) {
@@ -278,6 +279,7 @@ async function* chunksGenerator(
   const canStop = stop.promise !== undefined
 
   try {
+    // oxlint-disable-next-line typescript/no-unnecessary-condition
     while (true) {
       let result: IteratorResult<unknown>
       if (canStop) {
@@ -357,6 +359,7 @@ export async function consume<T, E, E2 = never>(
   const canStop = stop.promise !== undefined
 
   try {
+    // oxlint-disable-next-line typescript/no-unnecessary-condition
     while (true) {
       let result: IteratorResult<unknown>
       if (canStop) {
@@ -429,6 +432,7 @@ export async function collectText<E = never>(
   const canStop = stop.promise !== undefined
 
   try {
+    // oxlint-disable-next-line typescript/no-unnecessary-condition
     while (true) {
       let result: IteratorResult<unknown>
       if (canStop) {
@@ -630,6 +634,7 @@ async function* mapLinesGenerator<A>(
   const maxLineBytes = options.maxLineBytes
 
   try {
+    // oxlint-disable-next-line typescript/no-unnecessary-condition
     while (true) {
       let result: IteratorResult<unknown>
       if (canStop) {
@@ -1027,7 +1032,7 @@ async function nextOrStop<T>(
     return { done: false, result: await next }
   }
 
-  next.catch?.(() => {})
+  next.catch(() => {})
 
   const result = await Promise.race([next, stop.promise])
   return isStopError(result)
