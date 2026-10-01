@@ -75,5 +75,3 @@ function defaultCsvPath(inputPath: string, fallback: string): string {
 function csv(value: string): string {
   return `"${value.replaceAll('"', '""')}"`
 }
-
-export {}

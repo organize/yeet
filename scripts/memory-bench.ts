@@ -503,5 +503,3 @@ async function runParent() {
 
 if (process.env['MEMORY_BENCH_CHILD'] === '1') await runChildProcess()
 else await runParent()
-
-export {}

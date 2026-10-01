@@ -15,11 +15,10 @@ import { Result } from 'better-result'
  * collect vs Result.partition is apples-to-oranges (generator vs plain array)
  * and is also omitted.
  */
-import { bench, describe } from 'vitest'
+import { describe, it } from 'vitest'
 
 import { either } from '../src/combinators.js'
 import { left, right, type Either } from '../src/either.js'
-import { BENCH_OPTS } from './bench-options.js'
 
 type User = { id: string; name: string; active: boolean }
 type Order = { id: string; userId: string }
@@ -421,97 +420,75 @@ const brRunCheckout = () =>
   })
 
 describe('either — single yield, success', () => {
-  bench(
-    'yeet',
-    () => {
-      either(function* () {
-        const user = yield* getUser('1')
-        return user
-      })
-    },
-    BENCH_OPTS,
-  )
-
-  bench(
-    'better-result',
-    () => {
-      Result.gen(function* () {
-        const user = yield* brGetUser('1')
-        return Result.ok(user)
-      })
-    },
-    BENCH_OPTS,
-  )
+  it('run', async ({ bench }) => {
+    await bench.compare(
+      bench('yeet', () => {
+        either(function* () {
+          const user = yield* getUser('1')
+          return user
+        })
+      }),
+      bench('better-result', () => {
+        Result.gen(function* () {
+          const user = yield* brGetUser('1')
+          return Result.ok(user)
+        })
+      }),
+    )
+  })
 })
 
 describe('either — two yields, success', () => {
-  bench(
-    'yeet',
-    () => {
-      either(function* (raise) {
-        const user = yield* getUser('1')
-        if (!user.active) yield* raise('Inactive' as const)
-        const orders = yield* getOrders(user.id)
-        return { user, first: orders[0] }
-      })
-    },
-    BENCH_OPTS,
-  )
-
-  bench(
-    'better-result',
-    () => {
-      Result.gen(function* () {
-        const user = yield* brGetUser('1')
-        if (!user.active) return Result.err('Inactive' as const)
-        const orders = yield* brGetOrders(user.id)
-        return Result.ok({ user, first: orders[0] })
-      })
-    },
-    BENCH_OPTS,
-  )
+  it('run', async ({ bench }) => {
+    await bench.compare(
+      bench('yeet', () => {
+        either(function* (raise) {
+          const user = yield* getUser('1')
+          if (!user.active) yield* raise('Inactive' as const)
+          const orders = yield* getOrders(user.id)
+          return { user, first: orders[0] }
+        })
+      }),
+      bench('better-result', () => {
+        Result.gen(function* () {
+          const user = yield* brGetUser('1')
+          if (!user.active) return Result.err('Inactive' as const)
+          const orders = yield* brGetOrders(user.id)
+          return Result.ok({ user, first: orders[0] })
+        })
+      }),
+    )
+  })
 })
 
 describe('either — single yield, short-circuit', () => {
-  bench(
-    'yeet',
-    () => {
+  it('run', async ({ bench }) => {
+    bench('yeet', () => {
       either(function* () {
         const user = yield* getUser('not-found')
         return user
       })
-    },
-    BENCH_OPTS,
-  )
+    })
 
-  bench(
-    'better-result',
-    () => {
+    bench('better-result', () => {
       Result.gen(function* () {
         const user = yield* brGetUser('not-found')
         return Result.ok(user)
       })
-    },
-    BENCH_OPTS,
-  )
+    })
+  })
 })
 
 describe('either — complex nested checkout, success', () => {
-  bench(
-    'yeet',
-    () => {
+  it('run', async ({ bench }) => {
+    bench('yeet', () => {
       runCheckout()
-    },
-    BENCH_OPTS,
-  )
+    })
 
-  bench(
-    'better-result',
-    () => {
+    bench('better-result', () => {
       brRunCheckout()
-    },
-    BENCH_OPTS,
-  )
+    })
+  })
 })
 
 const fetchUser = async (id: string): Promise<Either<'NotFound', User>> =>
@@ -528,53 +505,45 @@ const brFetchUser = async (id: string) =>
 const brFetchOrders = async () => Promise.resolve(Result.ok(ORDERS))
 
 describe('either async — two yields, success', () => {
-  bench(
-    'yeet',
-    async () => {
-      await either(async function* (raise) {
-        const user = yield* await fetchUser('1')
-        const orders = yield* await fetchOrders()
-        if (orders.length === 0) yield* raise('NoOrders' as const)
-        return { user, orders }
-      })
-    },
-    BENCH_OPTS,
-  )
+  it('run', async ({ bench }) => {
+    await bench.compare(
+      bench('yeet', async () => {
+        await either(async function* (raise) {
+          const user = yield* await fetchUser('1')
+          const orders = yield* await fetchOrders()
+          if (orders.length === 0) yield* raise('NoOrders' as const)
+          return { user, orders }
+        })
+      }),
 
-  bench(
-    'better-result',
-    async () => {
-      await Result.gen(async function* () {
-        const user = yield* Result.await(brFetchUser('1'))
-        const orders = yield* Result.await(brFetchOrders())
-        if (orders.length === 0) return Result.err('NoOrders' as const)
-        return Result.ok({ user, orders })
-      })
-    },
-    BENCH_OPTS,
-  )
+      bench('better-result', async () => {
+        await Result.gen(async function* () {
+          const user = yield* Result.await(brFetchUser('1'))
+          const orders = yield* Result.await(brFetchOrders())
+          if (orders.length === 0) return Result.err('NoOrders' as const)
+          return Result.ok({ user, orders })
+        })
+      }),
+    )
+  })
 })
 
 describe('either async — single yield, short-circuit', () => {
-  bench(
-    'yeet',
-    async () => {
-      await either(async function* () {
-        const user = yield* await fetchUser('not-found')
-        return user
-      })
-    },
-    BENCH_OPTS,
-  )
+  it('run', async ({ bench }) => {
+    await bench.compare(
+      bench('yeet', async () => {
+        await either(async function* () {
+          const user = yield* await fetchUser('not-found')
+          return user
+        })
+      }),
 
-  bench(
-    'better-result',
-    async () => {
-      await Result.gen(async function* () {
-        const user = yield* Result.await(brFetchUser('not-found'))
-        return Result.ok(user)
-      })
-    },
-    BENCH_OPTS,
-  )
+      bench('better-result', async () => {
+        await Result.gen(async function* () {
+          const user = yield* Result.await(brFetchUser('not-found'))
+          return Result.ok(user)
+        })
+      }),
+    )
+  })
 })

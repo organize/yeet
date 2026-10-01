@@ -1,12 +1,12 @@
 import { Result } from 'better-result'
-import { afterAll, bench, describe } from 'vitest'
+import { afterAll, describe, it, type Bench } from 'vitest'
 
 import { either } from '../src/combinators.ts'
 import { left, right, type Either } from '../src/either.ts'
 import { ndjson } from '../src/stream.ts'
 import yeet from '../src/unplugin.ts'
 import { cleanupBenchFixtures, importBenchFixture } from './bench-fixture.ts'
-import { BENCH_OPTS, readPositiveInt } from './bench-options.ts'
+import { readPositiveInt } from './bench-options.ts'
 
 const YEET_SOURCE = new URL('../src/index.ts', import.meta.url).href
 const STREAM_SOURCE = new URL('../src/stream.ts', import.meta.url).href
@@ -517,45 +517,46 @@ benchStreamFamily()
 
 function benchFamily(suite: string, fn: keyof BenchModule): void {
   describe(suite, () => {
-    benchVariant('vanilla exceptions', vanillaModule, fn)
-    benchVariant('better-result', betterResultModule, fn)
-    benchVariant('yeet', yeetModule, fn)
-    benchVariant('yeet lowered', loweredModule, fn)
+    it('run', async ({ bench }) => {
+      await benchVariant('vanilla exceptions', vanillaModule, fn, bench)
+      await benchVariant('better-result', betterResultModule, fn, bench)
+      await benchVariant('yeet', yeetModule, fn, bench)
+      await benchVariant('yeet lowered', loweredModule, fn, bench)
+    })
   })
 }
 
-function benchVariant(
+async function benchVariant(
   name: string,
   module: BenchModule,
   fn: keyof BenchModule,
-): void {
+  bench: Bench,
+): Promise<void> {
   const next = indexer()
-  bench(
-    name,
-    async () => {
-      await consumeBatch(module, fn, next)
-    },
-    BENCH_OPTS,
-  )
+  bench(name, async () => {
+    await consumeBatch(module, fn, next)
+  })
 }
 
 function benchStreamFamily(): void {
   describe('streams: ndjson success', () => {
-    benchStreamVariant('vanilla parser', vanillaStreamModule)
-    benchStreamVariant('yeet stream', yeetStreamModule)
-    benchStreamVariant('yeet stream lowered', loweredModule)
+    it('run', async ({ bench }) => {
+      benchStreamVariant('vanilla parser', vanillaStreamModule, bench)
+      benchStreamVariant('yeet stream', yeetStreamModule, bench)
+      benchStreamVariant('yeet stream lowered', loweredModule, bench)
+    })
   })
 }
 
-function benchStreamVariant(name: string, module: StreamBenchModule): void {
+function benchStreamVariant(
+  name: string,
+  module: StreamBenchModule,
+  bench: Bench,
+): void {
   const next = indexer()
-  bench(
-    name,
-    async () => {
-      await consumeStreamBatch(module, next)
-    },
-    BENCH_OPTS,
-  )
+  bench(name, async () => {
+    await consumeStreamBatch(module, next)
+  })
 }
 
 async function consumeBatch(

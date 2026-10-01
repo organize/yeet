@@ -1,9 +1,9 @@
-import { bench, describe } from 'vitest'
+import { describe, it, type Bench } from 'vitest'
 
 import { forkEachStopped, rejected, siblingSettled } from '../src/async.ts'
 import { either } from '../src/combinators.ts'
 import { type Either, left, right } from '../src/either.ts'
-import { BENCH_OPTS, readPositiveInt } from './bench-options.ts'
+import { readPositiveInt } from './bench-options.ts'
 
 type Candidate = (
   signal: AbortSignal,
@@ -39,19 +39,27 @@ const cancelLosers = [
 ] as const satisfies readonly Candidate[]
 
 describe('scoped first success: immediate success', () => {
-  benchmarkPair(immediateSuccess)
+  it('run', async ({ bench }) => {
+    await benchmarkPair(bench, immediateSuccess)
+  })
 })
 
 describe('scoped first success: failures then success', () => {
-  benchmarkPair(failuresThenSuccess)
+  it('run', async ({ bench }) => {
+    await benchmarkPair(bench, failuresThenSuccess)
+  })
 })
 
 describe('scoped first success: all fail', () => {
-  benchmarkPair(allFail)
+  it('run', async ({ bench }) => {
+    await benchmarkPair(bench, allFail)
+  })
 })
 
 describe('scoped first success: cancel losers', () => {
-  benchmarkPair(cancelLosers)
+  it('run', async ({ bench }) => {
+    await benchmarkPair(bench, cancelLosers)
+  })
 })
 
 type EachMapper = (
@@ -108,23 +116,33 @@ const earlyBreakEach: EachScenario = {
 }
 
 describe('scoped completion stream: immediate success', () => {
-  benchmarkEachPair(immediateEach)
+  it('run', async ({ bench }) => {
+    await benchmarkEachPair(bench, immediateEach)
+  })
 })
 
 describe('scoped completion stream: mixed failures', () => {
-  benchmarkEachPair(mixedEach)
+  it('run', async ({ bench }) => {
+    await benchmarkEachPair(bench, mixedEach)
+  })
 })
 
 describe('scoped completion stream: out-of-order async completion', () => {
-  benchmarkEachPair(outOfOrderEach)
+  it('run', async ({ bench }) => {
+    await benchmarkEachPair(bench, outOfOrderEach)
+  })
 })
 
 describe('scoped completion stream: async source backpressure', () => {
-  benchmarkEachPair(asyncSourceEach)
+  it('run', async ({ bench }) => {
+    await benchmarkEachPair(bench, asyncSourceEach)
+  })
 })
 
 describe('scoped completion stream: early-break cancellation', () => {
-  benchmarkEachPair(earlyBreakEach)
+  it('run', async ({ bench }) => {
+    await benchmarkEachPair(bench, earlyBreakEach)
+  })
 })
 
 type ResourceTiming = 'sync' | 'immediate' | 'pending'
@@ -142,106 +160,88 @@ for (const scenario of [
   { count: 8, timing: 'sync', fail: true },
 ] as const satisfies readonly ResourceScenario[]) {
   describe(`scoped resources: ${scenario.count} ${scenario.timing} ${scenario.fail ? 'Left' : 'success'}`, () =>
-    benchmarkResourcePair(scenario))
+    it('run', async ({ bench }) => {
+      await benchmarkResourcePair(bench, scenario)
+    }))
 }
 
 describe('scoped resources: native async disposable', () => {
-  bench(
-    'native await using',
-    async () => consumeResourceBatch(nativeUsingResource),
-    BENCH_OPTS,
-  )
-  bench(
-    'yeet signal.acquire native disposable',
-    async () => consumeResourceBatch(yeetNativeResource),
-    BENCH_OPTS,
-  )
+  it('run', async ({ bench }) => {
+    await bench.compare(
+      bench('native await using', async () =>
+        consumeResourceBatch(nativeUsingResource)),
+      bench('yeet signal.acquire native disposable', async () =>
+        consumeResourceBatch(yeetNativeResource)),
+    )
+  })
 })
 
 describe('scoped resources: abort during acquisition', () => {
-  bench(
-    'manual AsyncDisposableStack + abort check',
-    async () => consumeResourceBatch(manualAbortDuringAcquire),
-    BENCH_OPTS,
-  )
-  bench(
-    'yeet signal.acquire',
-    async () => consumeResourceBatch(yeetAbortDuringAcquire),
-    BENCH_OPTS,
-  )
+  it('run', async ({ bench }) => {
+    await bench.compare(
+      bench('manual AsyncDisposableStack + abort check', async () =>
+        consumeResourceBatch(manualAbortDuringAcquire)),
+      bench('yeet signal.acquire', async () =>
+        consumeResourceBatch(yeetAbortDuringAcquire)),
+    )
+  })
 })
 
 describe('scoped resources: unused paths', () => {
-  bench(
-    'async either without signal',
-    async () => consumeResourceBatch(yeetWithoutSignal),
-    BENCH_OPTS,
-  )
-  bench(
-    'async either with signal, no acquire',
-    async () => consumeResourceBatch(yeetSignalOnly),
-    BENCH_OPTS,
-  )
+  it('run', async ({ bench }) => {
+    await bench.compare(
+      bench('async either without signal', async () =>
+        consumeResourceBatch(yeetWithoutSignal)),
+      bench('async either with signal, no acquire', async () =>
+        consumeResourceBatch(yeetSignalOnly)),
+    )
+  })
 })
 
-function benchmarkPair(tasks: readonly Candidate[]): void {
-  bench(
-    'manual cancellation-aware first Right',
-    async () => {
+async function benchmarkPair(
+  bench: Bench,
+  tasks: readonly Candidate[],
+): Promise<void> {
+  await bench.compare(
+    bench('manual cancellation-aware first Right', async () => {
       await consumeBatch(manualFirst, tasks)
-    },
-    BENCH_OPTS,
-  )
+    }),
 
-  bench(
-    'yeet signal.forkFirst',
-    async () => {
+    bench('yeet signal.forkFirst', async () => {
       await consumeBatch(yeetFirst, tasks)
-    },
-    BENCH_OPTS,
+    }),
   )
 }
 
-function benchmarkEachPair(scenario: EachScenario): void {
-  bench(
-    'manual bounded completion pool',
-    async () => {
+async function benchmarkEachPair(
+  bench: Bench,
+  scenario: EachScenario,
+): Promise<void> {
+  await bench.compare(
+    bench('manual bounded completion pool', async () => {
       await consumeEachBatch(manualEach, scenario)
-    },
-    BENCH_OPTS,
-  )
-
-  bench(
-    'yeet signal.forkEach',
-    async () => {
+    }),
+    bench('yeet signal.forkEach', async () => {
       await consumeEachBatch(yeetEach, scenario)
-    },
-    BENCH_OPTS,
+    }),
   )
 }
 
-function benchmarkResourcePair(scenario: ResourceScenario): void {
+async function benchmarkResourcePair(
+  bench: Bench,
+  scenario: ResourceScenario,
+): Promise<void> {
   if (scenario.count === 1) {
-    bench(
-      'manual try/finally',
-      async () =>
-        await consumeResourceBatch(
-          async () => await manualSingleResource(scenario),
-        ),
-      BENCH_OPTS,
-    )
+    bench('manual try/finally', async () =>
+      await consumeResourceBatch(
+        async () => await manualSingleResource(scenario),
+      ))
   }
-  bench(
-    'manual AsyncDisposableStack',
-    async () =>
-      await consumeResourceBatch(async () => await manualResources(scenario)),
-    BENCH_OPTS,
-  )
-  bench(
-    'yeet signal.acquire',
-    async () =>
-      await consumeResourceBatch(async () => await yeetResources(scenario)),
-    BENCH_OPTS,
+  await bench.compare(
+    bench('manual AsyncDisposableStack', async () =>
+      await consumeResourceBatch(async () => await manualResources(scenario))),
+    bench('yeet signal.acquire', async () =>
+      await consumeResourceBatch(async () => await yeetResources(scenario))),
   )
 }
 

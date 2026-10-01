@@ -1,10 +1,10 @@
-import { afterAll, bench, describe } from 'vitest'
+import { afterAll, describe, it } from 'vitest'
 
 import { type Either } from '../src/either.ts'
 import { bytes, collectText, consume, ndjson, sse } from '../src/stream.ts'
 import yeet from '../src/unplugin.ts'
 import { cleanupBenchFixtures, importBenchFixture } from './bench-fixture.ts'
-import { BENCH_OPTS, readPositiveInt } from './bench-options.ts'
+import { readPositiveInt } from './bench-options.ts'
 
 const BENCH_BATCH = readPositiveInt('BENCH_BATCH', 16)
 const YEET_SOURCE = new URL('../src/index.ts', import.meta.url).href
@@ -176,75 +176,56 @@ afterAll(async () => {
 })
 
 describe('streams: bytes', () => {
-  bench(
-    'vanilla concatenate byte chunks',
-    async () => {
-      await consumeBatch(vanillaBytes)
-    },
-    BENCH_OPTS,
-  )
+  it('run', async ({ bench }) => {
+    await bench.compare(
+      bench('vanilla concatenate byte chunks', async () => {
+        await consumeBatch(vanillaBytes)
+      }),
 
-  bench(
-    'yeet bytes()',
-    async () => {
-      await consumeBatch(yeetBytes)
-    },
-    BENCH_OPTS,
-  )
+      bench('yeet bytes()', async () => {
+        await consumeBatch(yeetBytes)
+      }),
+    )
+  })
 })
 
 describe('streams: text deltas', () => {
-  bench(
-    'vanilla collect text',
-    async () => {
-      await consumeBatch(vanillaCollectText)
-    },
-    BENCH_OPTS,
-  )
-
-  bench(
-    'yeet collectText()',
-    async () => {
-      await consumeBatch(yeetCollectText)
-    },
-    BENCH_OPTS,
-  )
+  it('run', async ({ bench }) => {
+    await bench.compare(
+      bench('vanilla collect text', async () => {
+        await consumeBatch(vanillaCollectText)
+      }),
+      bench('yeet collectText()', async () => {
+        await consumeBatch(yeetCollectText)
+      }),
+    )
+  })
 })
 
 describe('streams: ndjson', () => {
-  bench(
-    'vanilla parse ndjson',
-    async () => {
-      await consumeBatch(vanillaNdjson)
-    },
-    BENCH_OPTS,
-  )
-
-  bench(
-    'yeet ndjson() + consume()',
-    async () => {
-      await consumeBatch(yeetNdjson)
-    },
-    BENCH_OPTS,
-  )
+  it('run', async ({ bench }) => {
+    await bench.compare(
+      bench('vanilla parse ndjson', async () => {
+        await consumeBatch(vanillaNdjson)
+      }),
+      bench('yeet ndjson() + consume()', async () => {
+        await consumeBatch(yeetNdjson)
+      }),
+    )
+  })
 })
 
 describe('streams: sse', () => {
-  bench(
-    'vanilla parse sse',
-    async () => {
-      await consumeBatch(vanillaSse)
-    },
-    BENCH_OPTS,
-  )
-
-  bench(
-    'yeet sse() + consume()',
-    async () => {
-      await consumeBatch(yeetSse)
-    },
-    BENCH_OPTS,
-  )
+  it('run', async ({ bench }) => {
+    await bench.compare(
+      bench('vanilla parse sse', async () => {
+        await consumeBatch(vanillaSse)
+      }),
+      bench('yeet sse() + consume()', async () => {
+        await consumeBatch(yeetSse)
+      }),
+    )
+  })
 })
 
 benchPluginPair('streams: unplugin', 'json() in either', 'jsonDocument')
@@ -276,22 +257,18 @@ function benchPluginPair(
 ): void {
   describe(suite, () => {
     const runtimeIndex = indexer()
-    bench(
-      name,
-      async () => {
-        await consumePluginBatch(pluginRuntime, fn, runtimeIndex)
-      },
-      BENCH_OPTS,
-    )
 
     const optimizedIndex = indexer()
-    bench(
-      `${name} (unplugin transformed)`,
-      async () => {
-        await consumePluginBatch(pluginOptimized, fn, optimizedIndex)
-      },
-      BENCH_OPTS,
-    )
+    it('run', async ({ bench }) => {
+      await bench.compare(
+        bench(name, async () => {
+          await consumePluginBatch(pluginRuntime, fn, runtimeIndex)
+        }),
+        bench(`${name} (unplugin transformed)`, async () => {
+          await consumePluginBatch(pluginOptimized, fn, optimizedIndex)
+        }),
+      )
+    })
   })
 }
 

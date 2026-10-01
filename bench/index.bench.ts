@@ -1,8 +1,8 @@
-import { afterAll, bench, describe } from 'vitest'
+import { afterAll, describe, it } from 'vitest'
 
 import yeet from '../src/unplugin.ts'
 import { cleanupBenchFixtures, importBenchFixture } from './bench-fixture.ts'
-import { BENCH_OPTS, readPositiveInt } from './bench-options.ts'
+import { readPositiveInt } from './bench-options.ts'
 
 const YEET_SOURCE = new URL('../src/index.ts', import.meta.url).href
 const FIXTURE_ID = 'bench/index.bench.fixture.js'
@@ -334,30 +334,19 @@ async function consumeAsyncBatch(
   consume(value)
 }
 
-function benchPair(
-  suite: string,
-  name: string,
-  fn: keyof BenchModule,
-  options: typeof BENCH_OPTS = BENCH_OPTS,
-): void {
+function benchPair(suite: string, name: string, fn: keyof BenchModule): void {
   describe(suite, () => {
-    const runtimeIndex = indexer()
-    bench(
-      name,
-      () => {
+    it('run', async ({ bench }) => {
+      const runtimeIndex = indexer()
+      bench(name, () => {
         consumeBatch(runtime, fn, runtimeIndex)
-      },
-      options,
-    )
+      })
 
-    const optimizedIndex = indexer()
-    bench(
-      `${name} (unplugin transformed)`,
-      () => {
+      const optimizedIndex = indexer()
+      bench(`${name} (unplugin transformed)`, () => {
         consumeBatch(optimized, fn, optimizedIndex)
-      },
-      options,
-    )
+      })
+    })
   })
 }
 
@@ -365,42 +354,33 @@ function benchAsyncPair(
   suite: string,
   name: string,
   fn: keyof BenchModule,
-  options: typeof BENCH_OPTS = BENCH_OPTS,
 ): void {
   describe(suite, () => {
-    const runtimeIndex = indexer()
-    bench(
-      name,
-      async () => {
+    it('run', async ({ bench }) => {
+      const runtimeIndex = indexer()
+      bench(name, async () => {
         await consumeAsyncBatch(runtime, fn, runtimeIndex)
-      },
-      options,
-    )
+      })
 
-    const optimizedIndex = indexer()
-    bench(
-      `${name} (unplugin transformed)`,
-      async () => {
+      const optimizedIndex = indexer()
+      bench(`${name} (unplugin transformed)`, async () => {
         await consumeAsyncBatch(optimized, fn, optimizedIndex)
-      },
-      options,
-    )
+      })
+    })
   })
 }
 
 describe('baseline (plain functions, no Either)', () => {
-  const next = indexer()
-  bench(
-    'early exit via exception',
-    () => {
+  it('run', async ({ bench }) => {
+    const next = indexer()
+    bench('early exit via exception', () => {
       let value: unknown
       for (let batch = 0; batch < BENCH_BATCH; batch++) {
         value = runtime.baselineException(next())
       }
       consume(value)
-    },
-    BENCH_OPTS,
-  )
+    })
+  })
 })
 
 benchPair('either (sync)', 'single yield, success', 'eitherSingleYieldSuccess')
@@ -425,18 +405,16 @@ benchPair(
 )
 
 describe('either (sync)', () => {
-  const next = indexer()
-  bench(
-    'return raise()',
-    () => {
+  it('run', async ({ bench }) => {
+    const next = indexer()
+    bench('return raise()', () => {
       let value: unknown
       for (let batch = 0; batch < BENCH_BATCH; batch++) {
         value = runtime.eitherYieldRaise(next())
       }
       consume(value)
-    },
-    BENCH_OPTS,
-  )
+    })
+  })
 })
 
 benchAsyncPair(
